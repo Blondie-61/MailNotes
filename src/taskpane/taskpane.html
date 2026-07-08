@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=Edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>MailNotes</title>
+
+    <script type="text/javascript" src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
+    <link href="taskpane.css" rel="stylesheet" type="text/css" />
+</head>
+
+<body>
+    <div id="app">
+
+        <header class="app-header">
+            <div class="app-logo">📒</div>
+
+            <div>
+                <h1>MailNotes</h1>
+                <div class="subtitle">Notizen zur aktuellen E-Mail</div>
+            </div>
+        </header>
+
+        <section class="card">
+
+            <div class="field">
+                <div class="label">Betreff</div>
+                <div id="mail-subject" class="value">–</div>
+            </div>
+
+            <div class="separator"></div>
+
+            <div class="field">
+                <div class="label">Von</div>
+                <div id="mail-from" class="value">–</div>
+            </div>
+
+            <div class="separator"></div>
+
+            <div class="field">
+                <div class="label">Empfangen</div>
+                <div id="mail-date" class="value">–</div>
+            </div>
+
+        </section>
+
+        <section class="card">
+
+            <div class="section-title">Notiz</div>
+
+            <textarea
+                id="note-content"
+                class="note-editor"
+                placeholder="Für diese E-Mail existiert noch keine Notiz."></textarea>
+
+            <div class="button-row">
+                <button id="btn-save">💾 Speichern</button>
+            </div>
+
+            <div class="note-meta">
+                <div>Erstellt: <span id="note-created">–</span></div>
+                <div>Geändert: <span id="note-modified">–</span></div>
+            </div>
+
+        </section>
+
+        <details class="card debug-card">
+
+            <summary>Diagnose</summary>
+
+            <div class="field">
+                <div class="label">Internet Message-ID</div>
+                <div id="mail-message-id" class="value debug-value">–</div>
+            </div>
+
+            <div class="field">
+                <div class="label">Conversation-ID</div>
+                <div id="mail-conversation-id" class="value debug-value">–</div>
+            </div>
+
+            <div class="field">
+                <div class="label">Item-ID</div>
+                <div id="mail-item-id" class="value debug-value">–</div>
+            </div>
+
+        </details>
+
+    </div>
+</body>
+</html>
