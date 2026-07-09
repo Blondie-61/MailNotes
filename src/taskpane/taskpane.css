@@ -74,56 +74,159 @@ h1 {
     margin-bottom: 14px;
 }
 
-.empty-note {
-    border: 1px dashed #c7c7cc;
-    border-radius: 12px;
-    padding: 22px 14px;
-    text-align: center;
-    color: #6e6e73;
-    background: #fbfbfd;
-    font-size: 14px;
-    line-height: 1.4;
-}
-
-.note-meta {
-    margin-top: 14px;
-    padding-top: 12px;
-    border-top: 1px solid #eeeeef;
-    display: flex;
-    gap: 16px;
-    flex-wrap: wrap;
-    color: #6e6e73;
-    font-size: 12px;
-}
-
 .note-editor {
     width: 100%;
     min-height: 180px;
     padding: 12px;
-    box-sizing: border-box;
     resize: vertical;
-
     font-family: inherit;
     font-size: 14px;
     line-height: 1.4;
-
     color: #1d1d1f;
     background: #fbfbfd;
-
     border: 1px solid #c7c7cc;
     border-radius: 10px;
     outline: none;
 }
 
-.note-editor:focus {
+.note-editor:focus,
+.link-input:focus {
     border-color: #8aa8ff;
     box-shadow: 0 0 0 3px rgba(0, 122, 255, 0.12);
+}
+
+.links-title {
+    margin-top: 18px;
+}
+
+.link-add-row {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+}
+
+.link-input {
+    flex: 1;
+    min-width: 0;
+    border: 1px solid #c7c7cc;
+    border-radius: 10px;
+    padding: 10px 12px;
+    font-size: 14px;
+    font-family: inherit;
+    background: #fbfbfd;
+    color: #1d1d1f;
+    outline: none;
+}
+
+.link-add-button {
+    width: 38px;
+    height: 38px;
+    border: 0;
+    border-radius: 10px;
+    font-size: 24px;
+    line-height: 1;
+    cursor: pointer;
+    background: #e8e8ed;
+    color: #1d1d1f;
+}
+
+.link-add-button:hover {
+    background: #dedee5;
+}
+
+.hidden-links {
+    display: none;
+}
+
+.links-list {
+    margin-top: 10px;
+    border-top: 1px solid #eeeeef;
+}
+
+.link-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 0;
+    border-bottom: 1px solid #eeeeef;
+}
+
+.link-open {
+    flex: 1;
+    min-width: 0;
+    color: #0066cc;
+    text-decoration: none;
+    font-size: 13px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.link-open:hover {
+    text-decoration: underline;
+}
+
+.link-actions {
+    display: flex;
+    gap: 6px;
+    flex-shrink: 0;
+}
+
+.link-action {
+    width: 28px;
+    height: 28px;
+    border: 0;
+    background: transparent;
+    cursor: pointer;
+    border-radius: 6px;
+    color: #5f6368;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.link-action:hover {
+    background: #eeeeef;
+}
+
+.icon-copy {
+    position: relative;
+    width: 16px;
+    height: 18px;
+    display: inline-block;
+}
+
+.icon-copy::before,
+.icon-copy::after {
+    content: "";
+    position: absolute;
+    width: 9px;
+    height: 15px;
+    border: 1.7px solid currentColor;
+    border-radius: 2px;
+    background: transparent;
+}
+
+.icon-copy::before {
+    left: 5px;
+    top: 1px;
+}
+
+.icon-copy::after {
+    left: 1px;
+    top: 4px;
+    background: #ffffff;
+}
+
+.icon-delete {
+    font-size: 20px;
+    line-height: 1;
 }
 
 .button-row {
     display: flex;
     justify-content: flex-end;
-    margin-top: 10px;
+    margin-top: 14px;
 }
 
 #btn-save {
@@ -140,6 +243,17 @@ h1 {
 
 #btn-save:hover {
     background: #dedee3;
+}
+
+.note-meta {
+    margin-top: 14px;
+    padding-top: 12px;
+    border-top: 1px solid #eeeeef;
+    display: flex;
+    gap: 16px;
+    flex-wrap: wrap;
+    color: #6e6e73;
+    font-size: 12px;
 }
 
 .debug-card {

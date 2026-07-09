@@ -1,4 +1,4 @@
-/* global Office, document, window, navigator */
+/* global Office, document */
 
 const AgentUrl = "/api";
 
@@ -26,28 +26,12 @@ async function runOutlook() {
 
 function setupButtons() {
   const btnSave = document.getElementById("btn-save");
-  const btnAddLink = document.getElementById("btn-add-link");
-  const linkInput = document.getElementById("link-input") as HTMLInputElement;
 
   if (btnSave) {
     btnSave.onclick = async () => {
+      log("Speichern geklickt");
       await saveNote();
       await loadNote();
-    };
-  }
-
-  if (btnAddLink) {
-    btnAddLink.onclick = () => {
-      addLinkFromInput();
-    };
-  }
-
-  if (linkInput) {
-    linkInput.onkeydown = (event) => {
-      if (event.key === "Enter") {
-        event.preventDefault();
-        addLinkFromInput();
-      }
     };
   }
 }
@@ -72,7 +56,6 @@ async function loadNote() {
     setEditorText("note-content", "Keine Message-ID vorhanden.");
     setEditorText("note-links", "");
     setNoteMeta("", "");
-    renderLinks();
     return;
   }
 
@@ -88,18 +71,17 @@ async function loadNote() {
       setEditorText("note-links", "");
       setNoteMeta("", "");
     }
-
-    renderLinks();
   } catch (error) {
     setEditorText("note-content", "MailNotesAgent nicht erreichbar.");
     setEditorText("note-links", "");
     setNoteMeta("", "");
-    renderLinks();
     console.error(error);
   }
 }
 
 async function saveNote() {
+  log("saveNote() gestartet");
+
   const item = Office.context.mailbox.item;
 
   const messageId = (item as any).internetMessageId;
@@ -107,7 +89,12 @@ async function saveNote() {
   const content = getEditorText("note-content");
   const links = getEditorText("note-links");
 
+  log("messageId:", messageId);
+  log("content:", content);
+  log("links:", links);
+
   if (!messageId) {
+    log("keine messageId");
     return;
   }
 
@@ -117,10 +104,15 @@ async function saveNote() {
   body.append("content", content);
   body.append("links", links);
 
+  log("POST body:", body.toString());
+
   const response = await fetch(AgentUrl + "/note", {
     method: "POST",
     body: body
   });
+
+  const responseText = await response.text();
+  log("POST response:", responseText);
 
   if (!response.ok) {
     throw new Error("Agent returned HTTP " + response.status);
@@ -140,144 +132,6 @@ async function getNote(messageId: string): Promise<any> {
   }
 
   return await response.json();
-}
-
-function addLinkFromInput() {
-  const input = document.getElementById("link-input") as HTMLInputElement;
-
-  if (!input) {
-    return;
-  }
-
-  const value = input.value.trim();
-
-  if (!value) {
-    return;
-  }
-
-  const links = getLinks();
-
-  links.push(value);
-
-  setLinks(links);
-  input.value = "";
-  renderLinks();
-}
-
-function renderLinks() {
-  const list = document.getElementById("links-list");
-
-  if (!list) {
-    return;
-  }
-
-  list.innerHTML = "";
-
-  const links = getLinks();
-
-  for (let i = 0; i < links.length; i++) {
-    const url = links[i];
-
-    const row = document.createElement("div");
-    row.className = "link-row";
-
-    const open = document.createElement("a");
-    open.className = "link-open";
-    open.href = url;
-    open.textContent = getLinkCaption(url);
-    open.title = url;
-    open.onclick = (event) => {
-      event.preventDefault();
-      openLink(url);
-    };
-
-    const actions = document.createElement("div");
-    actions.className = "link-actions";
-
-    const copyButton = document.createElement("button");
-    copyButton.className = "link-action";
-    copyButton.type = "button";
-    copyButton.title = "Link kopieren";
-    copyButton.innerHTML = '<span class="icon-copy"></span>';
-    copyButton.onclick = () => copyLink(url);
-
-    const deleteButton = document.createElement("button");
-    deleteButton.className = "link-action";
-    deleteButton.type = "button";
-    deleteButton.title = "Link entfernen";
-    deleteButton.innerHTML = '<span class="icon-delete">×</span>';
-    deleteButton.onclick = () => deleteLink(i);
-
-    actions.appendChild(copyButton);
-    actions.appendChild(deleteButton);
-
-    row.appendChild(open);
-    row.appendChild(actions);
-
-    list.appendChild(row);
-  }
-}
-
-function getLinks(): string[] {
-  return getEditorText("note-links")
-    .split(/\r?\n/)
-    .map((x) => x.trim())
-    .filter((x) => x.length > 0);
-}
-
-function setLinks(links: string[]) {
-  setEditorText("note-links", links.join("\n"));
-}
-
-function openLink(url: string) {
-  window.open(url, "_blank");
-}
-
-async function copyLink(url: string) {
-  try {
-    await navigator.clipboard.writeText(url);
-  } catch (error) {
-    console.error(error);
-  }
-}
-
-function deleteLink(index: number) {
-  const links = getLinks();
-
-  links.splice(index, 1);
-
-  setLinks(links);
-  renderLinks();
-}
-
-function getLinkCaption(url: string): string {
-  try {
-    const lower = url.toLowerCase();
-
-    if (lower.startsWith("hook://")) {
-      return "🔗 Hookmark";
-    }
-
-    if (lower.startsWith("file://")) {
-      const parts = url.split("/");
-      const fileName = parts[parts.length - 1];
-
-      return "📄 " + decodeURIComponent(fileName || url);
-    }
-
-    if (lower.startsWith("http://") || lower.startsWith("https://")) {
-      const parsed = new URL(url);
-      return "🌐 " + parsed.hostname;
-    }
-
-    if (lower.startsWith("mailto:")) {
-      return "✉️ " + url.substring(7);
-    }
-
-    return "🔗 " + url;
-  } catch {
-    return "🔗 " + url;
-  }
 }
 
 function getEditorText(id: string): string {
