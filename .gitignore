@@ -1,18 +1,41 @@
+# -------------------------
 # Node.js
+# -------------------------
+
 node_modules/
-
-# Build-Ausgaben
 dist/
+coverage/
 
+# -------------------------
 # Logs
+# -------------------------
+
 *.log
 npm-debug.log*
 
+# -------------------------
 # macOS
-.DS_Store
+# -------------------------
 
-# VS Code (Benutzereinstellungen)
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# -------------------------
+# VS Code
+# -------------------------
+
 .vscode/
 
-# Coverage
-coverage/
+# -------------------------
+# Editor-Artefakte
+# -------------------------
+
+src/taskpane/taskpane.txt
+
+# -------------------------
+# versehentliche Kopien
+# -------------------------
+
+* Kopie *
+*.rtf
