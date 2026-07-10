@@ -27,6 +27,7 @@ async function runOutlook() {
 function setupButtons() {
   const btnSave = document.getElementById("btn-save");
   const btnAddLink = document.getElementById("btn-add-link");
+  const btnCopyMailLink = document.getElementById("btn-copy-mail-link");
   const linkInput = document.getElementById("link-input") as HTMLInputElement;
 
   if (btnSave) {
@@ -39,6 +40,12 @@ function setupButtons() {
   if (btnAddLink) {
     btnAddLink.onclick = () => {
       addLinkFromInput();
+    };
+  }
+
+  if (btnCopyMailLink) {
+    btnCopyMailLink.onclick = () => {
+      copyCurrentMailLink();
     };
   }
 
@@ -72,7 +79,7 @@ async function loadNote() {
     setEditorText("note-content", "Keine Message-ID vorhanden.");
     setEditorText("note-links", "");
     setNoteMeta("", "");
-    renderLinks();
+    await renderLinks();
     return;
   }
 
@@ -89,12 +96,12 @@ async function loadNote() {
       setNoteMeta("", "");
     }
 
-    renderLinks();
+    await renderLinks();
   } catch (error) {
     setEditorText("note-content", "MailNotesAgent nicht erreichbar.");
     setEditorText("note-links", "");
     setNoteMeta("", "");
-    renderLinks();
+    await renderLinks();
     console.error(error);
   }
 }
@@ -104,6 +111,9 @@ async function saveNote() {
 
   const messageId = (item as any).internetMessageId;
   const conversationId = (item as any).conversationId;
+  const subject = item.subject || "";
+  const senderName = (item as any).from?.displayName || "";
+  const mailDate = (item as any).dateTimeCreated || "";
   const content = getEditorText("note-content");
   const links = getEditorText("note-links");
 
@@ -112,10 +122,16 @@ async function saveNote() {
   }
 
   const body = new URLSearchParams();
+
   body.append("messageId", messageId);
   body.append("conversationId", conversationId || "");
+  body.append("subject", subject);
+  body.append("senderName", senderName);
+  body.append("mailDate", mailDate);
   body.append("content", content);
   body.append("links", links);
+
+  log("POST body:", body.toString());
 
   const response = await fetch(AgentUrl + "/note", {
     method: "POST",
@@ -161,10 +177,36 @@ function addLinkFromInput() {
 
   setLinks(links);
   input.value = "";
-  renderLinks();
+
+  void renderLinks();
 }
 
-function renderLinks() {
+async function copyCurrentMailLink() {
+  const item = Office.context.mailbox.item;
+  const messageId = (item as any).internetMessageId;
+
+  if (!messageId) {
+    setText("mail-link-status", "Keine Message-ID vorhanden.");
+    return;
+  }
+
+  const mailLink = "mailnotes:" + encodeURIComponent(messageId);
+
+  try {
+    await navigator.clipboard.writeText(mailLink);
+
+    setText("mail-link-status", "Kopiert.");
+
+    window.setTimeout(() => {
+      setText("mail-link-status", "");
+    }, 2000);
+  } catch (error) {
+    setText("mail-link-status", "Kopieren fehlgeschlagen.");
+    console.error(error);
+  }
+}
+
+async function renderLinks() {
   const list = document.getElementById("links-list");
 
   if (!list) {
@@ -184,8 +226,18 @@ function renderLinks() {
     const open = document.createElement("a");
     open.className = "link-open";
     open.href = url;
-    open.textContent = getLinkCaption(url);
     open.title = url;
+
+    const title = document.createElement("span");
+    title.className = "link-title";
+    title.textContent = getLinkCaption(url);
+
+    const subtitle = document.createElement("span");
+    subtitle.className = "link-subtitle";
+
+    open.appendChild(title);
+    open.appendChild(subtitle);
+
     open.onclick = (event) => {
       event.preventDefault();
       openLink(url);
@@ -215,6 +267,44 @@ function renderLinks() {
     row.appendChild(actions);
 
     list.appendChild(row);
+
+    if (url.toLowerCase().startsWith("mailnotes:")) {
+      try {
+        const resolved = await resolveLink(url);
+
+        if (resolved.found && resolved.type === "mail") {
+          title.textContent = "📧 " + (resolved.title || "Verknüpfte Mail");
+
+          const subtitleParts: string[] = [];
+
+          if (resolved.subtitle) {
+            const separatorPosition = resolved.subtitle.indexOf(" · ");
+
+            if (separatorPosition >= 0) {
+              const senderName = resolved.subtitle.substring(0, separatorPosition);
+              const mailDate = resolved.subtitle.substring(separatorPosition + 3);
+
+              if (senderName) {
+                subtitleParts.push(senderName);
+              }
+
+              if (mailDate) {
+                subtitleParts.push(formatDate(mailDate));
+              }
+            } else {
+              subtitleParts.push(resolved.subtitle);
+            }
+          }
+
+          subtitle.textContent = subtitleParts.join(" · ");
+        } else {
+          subtitle.textContent = "Mail konnte nicht aufgelöst werden.";
+        }
+      } catch (error) {
+        subtitle.textContent = "MailNotesAgent nicht erreichbar.";
+        console.error(error);
+      }
+    }
   }
 }
 
@@ -230,7 +320,46 @@ function setLinks(links: string[]) {
 }
 
 function openLink(url: string) {
+  if (url.toLowerCase().startsWith("mailnotes:")) {
+    openMailNotesLink(url);
+    return;
+  }
+
   window.open(url, "_blank");
+}
+
+async function openMailNotesLink(url: string) {
+  const messageId = decodeMailNotesMessageId(url);
+
+  try {
+    await navigator.clipboard.writeText(messageId);
+
+    setText(
+      "mail-link-status",
+      "Direktes Öffnen folgt noch – Message-ID wurde kopiert."
+    );
+
+    window.setTimeout(() => {
+      setText("mail-link-status", "");
+    }, 4000);
+  } catch (error) {
+    setText(
+      "mail-link-status",
+      "Direktes Öffnen folgt noch – Kopieren fehlgeschlagen."
+    );
+
+    console.error(error);
+  }
+}
+
+function decodeMailNotesMessageId(url: string): string {
+  const raw = url.substring("mailnotes:".length);
+
+  try {
+    return decodeURIComponent(raw);
+  } catch {
+    return raw;
+  }
 }
 
 async function copyLink(url: string) {
@@ -241,18 +370,35 @@ async function copyLink(url: string) {
   }
 }
 
+async function resolveLink(url: string): Promise<any> {
+  const response = await fetch(
+    AgentUrl + "/resolve?link=" + encodeURIComponent(url)
+  );
+
+  if (!response.ok) {
+    throw new Error("Agent returned HTTP " + response.status);
+  }
+
+  return await response.json();
+}
+
 function deleteLink(index: number) {
   const links = getLinks();
 
   links.splice(index, 1);
 
   setLinks(links);
-  renderLinks();
+
+  void renderLinks();
 }
 
 function getLinkCaption(url: string): string {
   try {
     const lower = url.toLowerCase();
+
+    if (lower.startsWith("mailnotes:")) {
+      return "📧 Verknüpfte Mail";
+    }
 
     if (lower.startsWith("hook://")) {
       return "🔗 Hookmark";
@@ -267,6 +413,7 @@ function getLinkCaption(url: string): string {
 
     if (lower.startsWith("http://") || lower.startsWith("https://")) {
       const parsed = new URL(url);
+
       return "🌐 " + parsed.hostname;
     }
 
