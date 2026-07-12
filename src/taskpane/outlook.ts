@@ -205,6 +205,9 @@ async function saveNote() {
   const conversationId =
     (item as any).conversationId;
 
+  const itemId =
+    (item as any).itemId || "";
+
   const subject =
     item.subject || "";
 
@@ -237,6 +240,11 @@ async function saveNote() {
   body.append(
     "conversationId",
     conversationId || ""
+  );
+
+  body.append(
+    "itemId",
+    itemId
   );
 
   body.append(
@@ -885,6 +893,123 @@ function openLink(
 async function openMailNotesLink(
   url: string
 ) {
+  try {
+    setText(
+      "mail-link-status",
+      "Mail wird geöffnet …"
+    );
+
+    const resolved =
+      await resolveLink(url);
+
+    if (
+      !resolved.found ||
+      resolved.type !== "mail"
+    ) {
+      await copyMessageIdFallback(
+        url,
+        "Mail konnte nicht aufgelöst werden – Message-ID wurde kopiert."
+      );
+
+      return;
+    }
+
+    const itemId =
+      resolved.itemId
+        ? resolved.itemId.toString()
+        : "";
+
+    if (!itemId) {
+      await copyMessageIdFallback(
+        url,
+        "Keine Item-ID vorhanden – Message-ID wurde kopiert."
+      );
+
+      return;
+    }
+
+    log(
+      "Öffne Item-ID:",
+      itemId
+    );
+
+    const mailbox =
+      Office.context.mailbox as any;
+
+    if (
+      typeof mailbox.displayMessageFormAsync ===
+      "function"
+    ) {
+      mailbox.displayMessageFormAsync(
+        itemId,
+        (result: Office.AsyncResult<void>) => {
+          log(
+            "displayMessageFormAsync:",
+            result
+          );
+
+          if (
+            result.status ===
+            Office.AsyncResultStatus.Failed
+          ) {
+            console.error(
+              "Mail konnte nicht geöffnet werden:",
+              result.error
+            );
+
+            void copyMessageIdFallback(
+              url,
+              "Öffnen fehlgeschlagen – Message-ID wurde kopiert."
+            );
+
+            return;
+          }
+
+          setText(
+            "mail-link-status",
+            ""
+          );
+        }
+      );
+
+      return;
+    }
+
+    if (
+      typeof mailbox.displayMessageForm ===
+      "function"
+    ) {
+      mailbox.displayMessageForm(
+        itemId
+      );
+
+      setText(
+        "mail-link-status",
+        ""
+      );
+
+      return;
+    }
+
+    await copyMessageIdFallback(
+      url,
+      "Öffnen wird von Outlook nicht unterstützt – Message-ID wurde kopiert."
+    );
+
+  } catch (error) {
+    console.error(error);
+
+    await copyMessageIdFallback(
+      url,
+      "Öffnen fehlgeschlagen – Message-ID wurde kopiert."
+    );
+  }
+}
+
+async function copyMessageIdFallback(
+  url: string,
+  statusText: string
+) {
   const messageId =
     decodeMailNotesMessageId(url);
 
@@ -895,24 +1020,24 @@ async function openMailNotesLink(
 
     setText(
       "mail-link-status",
-      "Direktes Öffnen folgt noch – Message-ID wurde kopiert."
+      statusText
     );
-
-    window.setTimeout(() => {
-      setText(
-        "mail-link-status",
-        ""
-      );
-    }, 4000);
 
   } catch (error) {
     setText(
       "mail-link-status",
-      "Direktes Öffnen folgt noch – Kopieren fehlgeschlagen."
+      "Mail konnte nicht geöffnet werden."
     );
 
     console.error(error);
   }
+
+  window.setTimeout(() => {
+    setText(
+      "mail-link-status",
+      ""
+    );
+  }, 5000);
 }
 
 function decodeMailNotesMessageId(
