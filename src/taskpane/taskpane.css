@@ -4,7 +4,11 @@
 
 body {
     margin: 0;
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    font-family:
+        -apple-system,
+        BlinkMacSystemFont,
+        "Segoe UI",
+        sans-serif;
     background: #f5f5f7;
     color: #1d1d1f;
 }
@@ -12,6 +16,8 @@ body {
 #app {
     padding: 24px;
 }
+
+/* Kopfbereich */
 
 .app-header {
     display: flex;
@@ -37,23 +43,30 @@ h1 {
     color: #6e6e73;
 }
 
+/* Karten */
+
 .card {
+    margin-bottom: 16px;
+    padding: 16px;
+
     background: #ffffff;
     border: 1px solid #e5e5e7;
     border-radius: 14px;
-    padding: 16px;
-    margin-bottom: 16px;
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+
+    box-shadow:
+        0 2px 8px rgba(0, 0, 0, 0.06);
 }
+
+/* Mailinformationen */
 
 .field {
     padding: 4px 0;
 }
 
 .label {
+    margin-bottom: 5px;
     font-size: 12px;
     color: #6e6e73;
-    margin-bottom: 5px;
 }
 
 .value {
@@ -64,26 +77,34 @@ h1 {
 
 .separator {
     height: 1px;
-    background: #eeeeef;
     margin: 12px 0;
+    background: #eeeeef;
 }
 
+/* Überschriften */
+
 .section-title {
+    margin-bottom: 14px;
     font-size: 18px;
     font-weight: 600;
-    margin-bottom: 14px;
 }
+
+/* Notizfeld */
 
 .note-editor {
     width: 100%;
     min-height: 180px;
     padding: 12px;
+
     resize: vertical;
+
     font-family: inherit;
     font-size: 14px;
     line-height: 1.4;
+
     color: #1d1d1f;
     background: #fbfbfd;
+
     border: 1px solid #c7c7cc;
     border-radius: 10px;
     outline: none;
@@ -92,8 +113,12 @@ h1 {
 .note-editor:focus,
 .link-input:focus {
     border-color: #8aa8ff;
-    box-shadow: 0 0 0 3px rgba(0, 122, 255, 0.12);
+
+    box-shadow:
+        0 0 0 3px rgba(0, 122, 255, 0.12);
 }
+
+/* Link-Eingabe */
 
 .links-title {
     margin-top: 18px;
@@ -101,55 +126,40 @@ h1 {
 
 .link-add-row {
     display: flex;
-    gap: 8px;
     align-items: center;
+    gap: 8px;
 }
 
 .link-input {
     flex: 1;
     min-width: 0;
+    padding: 10px 12px;
+
+    font-family: inherit;
+    font-size: 14px;
+
+    color: #1d1d1f;
+    background: #fbfbfd;
+
     border: 1px solid #c7c7cc;
     border-radius: 10px;
-    padding: 10px 12px;
-    font-size: 14px;
-    font-family: inherit;
-    background: #fbfbfd;
-    color: #1d1d1f;
     outline: none;
 }
 
 .link-add-button {
     width: 38px;
     height: 38px;
+
     border: 0;
     border-radius: 10px;
+
     font-size: 24px;
     line-height: 1;
+
     cursor: pointer;
+
     background: #e8e8ed;
     color: #1d1d1f;
-}
-
-.link-open {
-    display: flex;
-    flex-direction: column;
-    align-items: flex-start;
-}
-
-.link-title {
-    display: block;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    max-width: 100%;
-}
-
-.link-subtitle {
-    display: block;
-    margin-top: 2px;
-    color: #6e6e73;
-    font-size: 11px;
-    text-decoration: none;
 }
 
 .link-add-button:hover {
@@ -160,6 +170,8 @@ h1 {
     display: none;
 }
 
+/* Links und Backlinks */
+
 .links-list {
     margin-top: 10px;
     border-top: 1px solid #eeeeef;
@@ -169,63 +181,103 @@ h1 {
     display: flex;
     align-items: center;
     gap: 8px;
+
     padding: 8px 0;
+
     border-bottom: 1px solid #eeeeef;
 }
 
 .link-open {
+    display: flex;
     flex: 1;
+    flex-direction: column;
+    align-items: flex-start;
+
     min-width: 0;
+
     color: #0066cc;
     text-decoration: none;
     font-size: 13px;
+
     overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
 }
 
 .link-open:hover {
     text-decoration: underline;
 }
 
+.link-title {
+    display: block;
+    max-width: 100%;
+
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.link-subtitle {
+    display: block;
+    max-width: 100%;
+    margin-top: 2px;
+
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+
+    color: #6e6e73;
+    font-size: 11px;
+    text-decoration: none;
+}
+
 .link-actions {
     display: flex;
-    gap: 6px;
     flex-shrink: 0;
+    gap: 6px;
 }
 
 .link-action {
-    width: 28px;
-    height: 28px;
-    border: 0;
-    background: transparent;
-    cursor: pointer;
-    border-radius: 6px;
-    color: #5f6368;
     display: flex;
     align-items: center;
     justify-content: center;
+
+    width: 28px;
+    height: 28px;
+
+    border: 0;
+    border-radius: 6px;
+
+    cursor: pointer;
+
+    background: transparent;
+    color: #5f6368;
 }
 
 .link-action:hover {
     background: #eeeeef;
 }
 
+/* Kopieren-Symbol */
+
 .icon-copy {
     position: relative;
+    display: inline-block;
+
     width: 16px;
     height: 18px;
-    display: inline-block;
 }
 
 .icon-copy::before,
 .icon-copy::after {
     content: "";
+
     position: absolute;
+
     width: 9px;
     height: 15px;
+
     border: 1.7px solid currentColor;
     border-radius: 2px;
+
     background: transparent;
 }
 
@@ -240,27 +292,54 @@ h1 {
     background: #ffffff;
 }
 
+/* Entfernen-Symbol */
+
 .icon-delete {
     font-size: 20px;
     line-height: 1;
 }
 
+/* Backlinks */
+
+.backlinks-section {
+    margin-top: 18px;
+}
+
+.backlinks-section[hidden] {
+    display: none;
+}
+
+.backlinks-title {
+    margin-bottom: 8px;
+}
+
+.backlink-row .link-open {
+    padding-right: 4px;
+}
+
+/* Mail-Link kopieren */
+
 .mail-link-row {
     display: flex;
     align-items: center;
+    flex-wrap: wrap;
+
     gap: 10px;
     margin-top: 10px;
-    flex-wrap: wrap;
 }
 
 .mail-link-copy-button {
     max-width: 100%;
+    padding: 6px 10px;
+
     border: 0;
     border-radius: 8px;
-    padding: 6px 10px;
+
     font-family: inherit;
     font-size: 13px;
+
     cursor: pointer;
+
     background: #e9e9ed;
     color: #1d1d1f;
 }
@@ -274,22 +353,29 @@ h1 {
     color: #6e6e73;
 }
 
+/* Speichern */
+
 .button-row {
     display: flex;
     justify-content: flex-end;
-    margin-top: 14px;
     flex-wrap: wrap;
+
     gap: 10px;
+    margin-top: 14px;
 }
 
 #btn-save {
     min-width: 130px;
     padding: 6px 12px;
+
     border: 0;
     border-radius: 8px;
+
     font-family: inherit;
     font-size: 13px;
+
     cursor: pointer;
+
     background: #e9e9ed;
     color: #1d1d1f;
 }
@@ -298,32 +384,49 @@ h1 {
     background: #dedee3;
 }
 
+/* Metadaten */
+
 .note-meta {
+    display: flex;
+    flex-wrap: wrap;
+
+    gap: 16px;
     margin-top: 14px;
     padding-top: 12px;
+
     border-top: 1px solid #eeeeef;
-    display: flex;
-    gap: 16px;
-    flex-wrap: wrap;
+
     color: #6e6e73;
     font-size: 12px;
 }
+
+/* Diagnose */
 
 .debug-card {
     font-size: 13px;
 }
 
 .debug-card summary {
+    margin-bottom: 12px;
+
     cursor: pointer;
     font-weight: 600;
-    margin-bottom: 12px;
 }
 
 .debug-value {
-    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    font-family:
+        ui-monospace,
+        SFMono-Regular,
+        Menlo,
+        Monaco,
+        Consolas,
+        monospace;
+
     font-size: 11px;
     color: #444;
 }
+
+/* Schmale Taskpanes */
 
 @media (max-width: 420px) {
     .button-row {
