@@ -4,6 +4,8 @@ const AgentUrl = "/api";
 
 const DEBUG = true;
 
+let itemChangeSequence = 0;
+
 function log(...args: any[]) {
   if (DEBUG) {
     console.log(...args);
@@ -13,16 +15,82 @@ function log(...args: any[]) {
 Office.onReady((info) => {
   log("Office.onReady", info);
 
-  if (info.host === Office.HostType.Outlook) {
-    void runOutlook();
+  if (info.host !== Office.HostType.Outlook) {
+    return;
   }
+
+  Office.context.mailbox.addHandlerAsync(
+    Office.EventType.ItemChanged,
+    handleItemChanged,
+    (result) => {
+      if (result.status === Office.AsyncResultStatus.Failed) {
+        console.error(
+          "ItemChanged konnte nicht registriert werden:",
+          result.error
+        );
+
+        return;
+      }
+
+      log("ItemChanged wurde registriert.");
+    }
+  );
+
+  void runOutlook();
 });
 
 async function runOutlook() {
-  showMailInformation();
   setupButtons();
 
-  await loadNote();
+  const sequence = ++itemChangeSequence;
+
+  clearCurrentMailDisplay();
+  showMailInformation();
+
+  await loadNote(sequence);
+}
+
+async function handleItemChanged() {
+  const sequence = ++itemChangeSequence;
+
+  log("ItemChanged", sequence);
+
+  clearCurrentMailDisplay();
+  showMailInformation();
+
+  await loadNote(sequence);
+}
+
+function clearCurrentMailDisplay() {
+  setText("mail-subject", "");
+  setText("mail-from", "");
+  setText("mail-date", "");
+
+  setText("mail-message-id", "");
+  setText("mail-conversation-id", "");
+  setText("mail-item-id", "");
+
+  setEditorText("note-content", "");
+  setEditorText("note-links", "");
+
+  setNoteMeta("", "");
+  setText("mail-link-status", "");
+
+  const linkInput =
+    document.getElementById("link-input") as HTMLInputElement;
+
+  if (linkInput) {
+    linkInput.value = "";
+  }
+
+  const linksList =
+    document.getElementById("links-list");
+
+  if (linksList) {
+    linksList.innerHTML = "";
+  }
+
+  clearBacklinks();
 }
 
 function setupButtons() {
@@ -56,7 +124,7 @@ function setupButtons() {
 
   if (btnAddLink) {
     btnAddLink.onclick = () => {
-      addLinkFromInput();
+    void addLinkFromInput();
     };
   }
 
@@ -66,19 +134,32 @@ function setupButtons() {
     };
   }
 
-  if (linkInput) {
-    linkInput.onkeydown = (event) => {
-      if (event.key === "Enter") {
-        event.preventDefault();
-        addLinkFromInput();
-      }
-    };
-  }
+if (linkInput) {
+  linkInput.onkeydown = (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      void addLinkFromInput();
+    }
+  };
+}
+
 }
 
 function showMailInformation() {
   const item =
     Office.context.mailbox.item;
+
+  if (!item) {
+    setText("mail-subject", "");
+    setText("mail-from", "");
+    setText("mail-date", "");
+
+    setText("mail-message-id", "");
+    setText("mail-conversation-id", "");
+    setText("mail-item-id", "");
+
+    return;
+  }
 
   setText(
     "mail-subject",
@@ -113,9 +194,16 @@ function showMailInformation() {
   );
 }
 
-async function loadNote() {
+async function loadNote(
+  expectedSequence: number = itemChangeSequence
+) {
   const item =
     Office.context.mailbox.item;
+
+  if (!item) {
+    clearCurrentMailDisplay();
+    return;
+  }
 
   const messageId =
     (item as any).internetMessageId;
@@ -133,7 +221,7 @@ async function loadNote() {
 
     setNoteMeta("", "");
 
-    await renderLinks();
+    await renderLinks(expectedSequence);
     clearBacklinks();
 
     return;
@@ -142,6 +230,32 @@ async function loadNote() {
   try {
     const note =
       await getNote(messageId);
+
+    if (expectedSequence !== itemChangeSequence) {
+      log(
+        "Veraltete Notizantwort verworfen:",
+        messageId
+      );
+
+      return;
+    }
+
+    const currentItem =
+      Office.context.mailbox.item;
+
+        const currentMessageId =
+      currentItem
+        ? (currentItem as any).internetMessageId
+        : "";
+
+    if (currentMessageId !== messageId) {
+      log(
+        "Mail wurde während des Ladens gewechselt:",
+        messageId
+      );
+
+      return;
+    }
 
     if (note.found) {
       setEditorText(
@@ -172,10 +286,22 @@ async function loadNote() {
       setNoteMeta("", "");
     }
 
-    await renderLinks();
-    await renderBacklinks(messageId);
+    await renderLinks(expectedSequence);
+
+    if (expectedSequence !== itemChangeSequence) {
+      return;
+    }
+
+    await renderBacklinks(
+      messageId,
+      expectedSequence
+    );
 
   } catch (error) {
+    if (expectedSequence !== itemChangeSequence) {
+      return;
+    }
+
     setEditorText(
       "note-content",
       "MailNotesAgent nicht erreichbar."
@@ -188,7 +314,7 @@ async function loadNote() {
 
     setNoteMeta("", "");
 
-    await renderLinks();
+    await renderLinks(expectedSequence);
     clearBacklinks();
 
     console.error(error);
@@ -198,6 +324,12 @@ async function loadNote() {
 async function saveNote() {
   const item =
     Office.context.mailbox.item;
+
+  if (!item) {
+    throw new Error(
+      "Keine Mail ausgewählt."
+    );
+  }
 
   const messageId =
     (item as any).internetMessageId;
@@ -310,7 +442,6 @@ async function saveNote() {
 async function getNote(
   messageId: string
 ): Promise<any> {
-
   const url =
     AgentUrl +
     "/note?messageId=" +
@@ -347,7 +478,8 @@ async function getNote(
   return JSON.parse(responseText);
 }
 
-function addLinkFromInput() {
+
+async function addLinkFromInput() {
   const input =
     document.getElementById(
       "link-input"
@@ -373,12 +505,46 @@ function addLinkFromInput() {
 
   input.value = "";
 
-  void renderLinks();
+  await renderLinks();
+
+  try {
+    await saveNote();
+    await loadNote();
+
+    setText(
+      "mail-link-status",
+      "Link hinzugefügt und gespeichert."
+    );
+
+    window.setTimeout(() => {
+      setText(
+        "mail-link-status",
+        ""
+      );
+    }, 2000);
+
+  } catch (error) {
+    setText(
+      "mail-link-status",
+      "Link hinzugefügt, Speichern fehlgeschlagen."
+    );
+
+    console.error(error);
+  }
 }
 
 async function copyCurrentMailLink() {
   const item =
     Office.context.mailbox.item;
+
+  if (!item) {
+    setText(
+      "mail-link-status",
+      "Keine Mail ausgewählt."
+    );
+
+    return;
+  }
 
   const messageId =
     (item as any).internetMessageId;
@@ -397,13 +563,20 @@ async function copyCurrentMailLink() {
     encodeURIComponent(messageId);
 
   try {
+    setText(
+      "mail-link-status",
+      "Mail wird registriert …"
+    );
+
+    await saveNote();
+
     await navigator.clipboard.writeText(
       mailLink
     );
 
     setText(
       "mail-link-status",
-      "Kopiert."
+      "Registriert und kopiert."
     );
 
     window.setTimeout(() => {
@@ -411,19 +584,21 @@ async function copyCurrentMailLink() {
         "mail-link-status",
         ""
       );
-    }, 2000);
+    }, 2500);
 
   } catch (error) {
     setText(
       "mail-link-status",
-      "Kopieren fehlgeschlagen."
+      "Registrieren oder Kopieren fehlgeschlagen."
     );
 
     console.error(error);
   }
 }
 
-async function renderLinks() {
+async function renderLinks(
+  expectedSequence: number = itemChangeSequence
+) {
   const list =
     document.getElementById(
       "links-list"
@@ -433,16 +608,21 @@ async function renderLinks() {
     return;
   }
 
-  list.innerHTML = "";
-
   const links =
     getLinks();
+
+  const fragment =
+    document.createDocumentFragment();
 
   for (
     let index = 0;
     index < links.length;
     index++
   ) {
+    if (expectedSequence !== itemChangeSequence) {
+      return;
+    }
+
     const url =
       links[index];
 
@@ -514,8 +694,9 @@ async function renderLinks() {
     deleteButton.innerHTML =
       '<span class="icon-delete">×</span>';
 
-    deleteButton.onclick = () => {
-      deleteLink(index);
+    deleteButton.onclick = async () => {
+      deleteButton.disabled = true;
+      await deleteLink(index);
     };
 
     actions.appendChild(
@@ -529,7 +710,7 @@ async function renderLinks() {
     row.appendChild(open);
     row.appendChild(actions);
 
-    list.appendChild(row);
+    fragment.appendChild(row);
 
     if (
       url
@@ -539,20 +720,32 @@ async function renderLinks() {
       await resolveRenderedMailLink(
         url,
         title,
-        subtitle
+        subtitle,
+        expectedSequence
       );
     }
   }
+
+  if (expectedSequence !== itemChangeSequence) {
+    return;
+  }
+
+  list.replaceChildren(fragment);
 }
 
 async function resolveRenderedMailLink(
   url: string,
   title: HTMLElement,
-  subtitle: HTMLElement
+  subtitle: HTMLElement,
+  expectedSequence: number
 ) {
   try {
     const resolved =
       await resolveLink(url);
+
+    if (expectedSequence !== itemChangeSequence) {
+      return;
+    }
 
     if (
       resolved.found &&
@@ -587,7 +780,6 @@ async function resolveRenderedMailLink(
 function formatResolvedSubtitle(
   value: any
 ): string {
-
   if (!value) {
     return "";
   }
@@ -635,7 +827,6 @@ function formatResolvedSubtitle(
 async function getBacklinks(
   messageId: string
 ): Promise<any> {
-
   const url =
     AgentUrl +
     "/backlinks?messageId=" +
@@ -673,7 +864,8 @@ async function getBacklinks(
 }
 
 async function renderBacklinks(
-  messageId: string
+  messageId: string,
+  expectedSequence: number = itemChangeSequence
 ) {
   const section =
     document.getElementById(
@@ -689,23 +881,24 @@ async function renderBacklinks(
     return;
   }
 
-  list.innerHTML = "";
-  section.hidden = true;
-
   try {
     const result =
       await getBacklinks(messageId);
+
+    if (
+      expectedSequence !== itemChangeSequence ||
+      getCurrentMessageId() !== messageId
+    ) {
+      return;
+    }
 
     const items =
       Array.isArray(result.items)
         ? result.items
         : [];
 
-    if (items.length === 0) {
-      return;
-    }
-
-    section.hidden = false;
+    const fragment =
+      document.createDocumentFragment();
 
     for (const item of items) {
       const sourceMessageId =
@@ -733,7 +926,7 @@ async function renderBacklinks(
         mailLink;
 
       open.title =
-        sourceMessageId;
+        item.subject || sourceMessageId;
 
       const title =
         document.createElement("span");
@@ -798,10 +991,24 @@ async function renderBacklinks(
       row.appendChild(open);
       row.appendChild(actions);
 
-      list.appendChild(row);
+      fragment.appendChild(row);
     }
 
+    if (
+      expectedSequence !== itemChangeSequence ||
+      getCurrentMessageId() !== messageId
+    ) {
+      return;
+    }
+
+    list.replaceChildren(fragment);
+    section.hidden = items.length === 0;
+
   } catch (error) {
+    if (expectedSequence !== itemChangeSequence) {
+      return;
+    }
+
     clearBacklinks();
     console.error(error);
   }
@@ -831,7 +1038,6 @@ function createCopyButton(
   value: string,
   title: string
 ): HTMLButtonElement {
-
   const button =
     document.createElement("button");
 
@@ -1043,7 +1249,6 @@ async function copyMessageIdFallback(
 function decodeMailNotesMessageId(
   url: string
 ): string {
-
   const raw =
     url.substring(
       "mailnotes:".length
@@ -1071,7 +1276,6 @@ async function copyLink(
 async function resolveLink(
   url: string
 ): Promise<any> {
-
   const response =
     await fetch(
       AgentUrl +
@@ -1089,26 +1293,97 @@ async function resolveLink(
   return await response.json();
 }
 
-function deleteLink(
+async function deleteLink(
   index: number
 ) {
+  const expectedSequence =
+    itemChangeSequence;
+
   const links =
     getLinks();
 
-  links.splice(
-    index,
-    1
-  );
+  const deletedLinks =
+    links.splice(
+      index,
+      1
+    );
+
+  if (deletedLinks.length === 0) {
+    return;
+  }
 
   setLinks(links);
 
-  void renderLinks();
+  await renderLinks(
+    expectedSequence
+  );
+
+  try {
+    await saveNote();
+
+    if (
+      expectedSequence !==
+      itemChangeSequence
+    ) {
+      return;
+    }
+
+    setText(
+      "mail-link-status",
+      "Link gelöscht."
+    );
+
+    window.setTimeout(() => {
+      if (
+        expectedSequence ===
+        itemChangeSequence
+      ) {
+        setText(
+          "mail-link-status",
+          ""
+        );
+      }
+    }, 2000);
+
+  } catch (error) {
+    if (
+      expectedSequence !==
+      itemChangeSequence
+    ) {
+      console.error(error);
+      return;
+    }
+
+    const restoredLinks =
+      getLinks();
+
+    restoredLinks.splice(
+      Math.min(
+        index,
+        restoredLinks.length
+      ),
+      0,
+      deletedLinks[0]
+    );
+
+    setLinks(restoredLinks);
+
+    await renderLinks(
+      expectedSequence
+    );
+
+    setText(
+      "mail-link-status",
+      "Löschen konnte nicht gespeichert werden."
+    );
+
+    console.error(error);
+  }
 }
 
 function getLinkCaption(
   url: string
 ): string {
-
   try {
     const lower =
       url.toLowerCase();
@@ -1171,10 +1446,18 @@ function getLinkCaption(
   }
 }
 
+function getCurrentMessageId(): string {
+  const item =
+    Office.context.mailbox.item;
+
+  return item
+    ? (item as any).internetMessageId || ""
+    : "";
+}
+
 function getEditorText(
   id: string
 ): string {
-
   const element =
     document.getElementById(
       id
@@ -1224,7 +1507,6 @@ function setNoteMeta(
 function formatDate(
   value: any
 ): string {
-
   if (!value) {
     return "–";
   }
