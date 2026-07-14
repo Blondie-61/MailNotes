@@ -130,7 +130,7 @@ function setupButtons() {
 
   if (btnCopyMailLink) {
     btnCopyMailLink.onclick = () => {
-      void rememberCurrentMailLink();
+      void copyCurrentMailLink();
     };
   }
 
@@ -489,31 +489,15 @@ async function addLinkFromInput() {
     return;
   }
 
-  let value =
+  const value =
     input.value.trim();
 
   if (!value) {
-    const bufferedLink =
-      await getBufferedMailLink();
-
-    if (!bufferedLink) {
-      return;
-    }
-
-    value = bufferedLink;
+    return;
   }
 
   const links =
     getLinks();
-
-  if (links.includes(value)) {
-    setText(
-      "mail-link-status",
-      "Dieser Link ist bereits vorhanden."
-    );
-
-    return;
-  }
 
   links.push(value);
 
@@ -549,7 +533,7 @@ async function addLinkFromInput() {
   }
 }
 
-async function rememberCurrentMailLink() {
+async function copyCurrentMailLink() {
   const item =
     Office.context.mailbox.item;
 
@@ -574,45 +558,25 @@ async function rememberCurrentMailLink() {
     return;
   }
 
-  const itemId =
-    (item as any).itemId || "";
-
-  const conversationId =
-    (item as any).conversationId || "";
-
-  const subject =
-    item.subject || "";
-
-  const senderName =
-    (item as any).from?.displayName || "";
-
-  const senderAddress =
-    (item as any).from?.emailAddress || "";
-
-  const mailDate =
-    (item as any).dateTimeCreated || "";
+  const mailLink =
+    "mailnotes:" +
+    encodeURIComponent(messageId);
 
   try {
     setText(
       "mail-link-status",
-      "Mail-Link wird gemerkt …"
+      "Mail wird registriert …"
     );
 
     await saveNote();
 
-    await setLinkBuffer({
-      messageId,
-      itemId,
-      conversationId,
-      subject,
-      senderName,
-      senderAddress,
-      mailDate
-    });
+    await navigator.clipboard.writeText(
+      mailLink
+    );
 
     setText(
       "mail-link-status",
-      "Mail-Link gemerkt."
+      "Registriert und kopiert."
     );
 
     window.setTimeout(() => {
@@ -625,7 +589,7 @@ async function rememberCurrentMailLink() {
   } catch (error) {
     setText(
       "mail-link-status",
-      "Mail-Link konnte nicht gemerkt werden."
+      "Registrieren oder Kopieren fehlgeschlagen."
     );
 
     console.error(error);
@@ -1249,16 +1213,30 @@ async function openMailNotesLink(
 }
 
 async function copyMessageIdFallback(
-  _url: string,
+  url: string,
   statusText: string
 ) {
-  setText(
-    "mail-link-status",
-    statusText.replace(
-      " – Message-ID wurde kopiert.",
-      "."
-    )
-  );
+  const messageId =
+    decodeMailNotesMessageId(url);
+
+  try {
+    await navigator.clipboard.writeText(
+      messageId
+    );
+
+    setText(
+      "mail-link-status",
+      statusText
+    );
+
+  } catch (error) {
+    setText(
+      "mail-link-status",
+      "Mail konnte nicht geöffnet werden."
+    );
+
+    console.error(error);
+  }
 
   window.setTimeout(() => {
     setText(
@@ -1292,97 +1270,6 @@ async function copyLink(
     );
   } catch (error) {
     console.error(error);
-  }
-}
-
-type LinkBufferData = {
-  messageId: string;
-  itemId?: string;
-  conversationId?: string;
-  subject?: string;
-  senderName?: string;
-  senderAddress?: string;
-  mailDate?: string;
-  mailNotesId?: string;
-};
-
-async function setLinkBuffer(
-  data: LinkBufferData
-) {
-  const body =
-    new URLSearchParams();
-
-  body.append("messageId", data.messageId);
-  body.append("itemId", data.itemId || "");
-  body.append("conversationId", data.conversationId || "");
-  body.append("subject", data.subject || "");
-  body.append("senderName", data.senderName || "");
-  body.append("senderAddress", data.senderAddress || "");
-  body.append("mailDate", data.mailDate || "");
-  body.append("mailNotesId", data.mailNotesId || "");
-
-  const response =
-    await fetch(
-      AgentUrl + "/linkbuffer",
-      {
-        method: "POST",
-        body
-      }
-    );
-
-  if (!response.ok) {
-    throw new Error(
-      "Agent returned HTTP " +
-      response.status
-    );
-  }
-}
-
-async function getBufferedMailLink(): Promise<string> {
-  try {
-    setText(
-      "mail-link-status",
-      "Gemerkter Mail-Link wird geladen …"
-    );
-
-    const response =
-      await fetch(
-        AgentUrl + "/linkbuffer"
-      );
-
-    if (!response.ok) {
-      throw new Error(
-        "Agent returned HTTP " +
-        response.status
-      );
-    }
-
-    const buffer =
-      await response.json();
-
-    if (!buffer.found || !buffer.messageId) {
-      setText(
-        "mail-link-status",
-        "Kein Mail-Link gemerkt."
-      );
-
-      return "";
-    }
-
-    return (
-      "mailnotes:" +
-      encodeURIComponent(
-        buffer.messageId.toString()
-      )
-    );
-  } catch (error) {
-    setText(
-      "mail-link-status",
-      "Gemerkter Mail-Link konnte nicht geladen werden."
-    );
-
-    console.error(error);
-    return "";
   }
 }
 
