@@ -43,6 +43,24 @@ h1 {
     color: #6e6e73;
 }
 
+
+.shl-status {
+    margin-top: 5px;
+    font-size: 12px;
+    font-weight: 600;
+    line-height: 1.25;
+    transition: opacity 140ms ease;
+}
+
+.shl-status.active,
+.shl-status.repaired {
+    color: #217a3c;
+}
+
+.shl-status.error {
+    color: #9a6700;
+}
+
 /* Karten */
 
 .card {

@@ -5,6 +5,8 @@ const AgentUrl = "/api";
 const DEBUG = true;
 
 let itemChangeSequence = 0;
+let currentMailNotesId = "";
+let shlStatusResetTimer: number | undefined;
 
 function log(...args: any[]) {
   if (DEBUG) {
@@ -33,6 +35,7 @@ Office.onReady((info) => {
       }
 
       log("ItemChanged wurde registriert.");
+      setShlStatus("active");
     }
   );
 
@@ -46,7 +49,6 @@ async function runOutlook() {
 
   clearCurrentMailDisplay();
   showMailInformation();
-
   await loadNote(sequence);
 }
 
@@ -57,11 +59,140 @@ async function handleItemChanged() {
 
   clearCurrentMailDisplay();
   showMailInformation();
-
   await loadNote(sequence);
 }
 
+type CurrentMailIdentity = {
+  messageId: string;
+  itemId: string;
+  conversationId: string;
+  mailboxAddress: string;
+  subject: string;
+  senderName: string;
+  senderAddress: string;
+  mailDate: string;
+};
+
+function getCurrentMailSnapshot(): CurrentMailIdentity | null {
+  const item = Office.context.mailbox.item;
+
+  if (!item) {
+    return null;
+  }
+
+  const messageId =
+    ((item as any).internetMessageId || "").toString();
+
+  if (!messageId) {
+    return null;
+  }
+
+  return {
+    messageId,
+    itemId: ((item as any).itemId || "").toString(),
+    conversationId:
+      ((item as any).conversationId || "").toString(),
+    mailboxAddress:
+      (Office.context.mailbox.userProfile?.emailAddress || "").toString(),
+    subject: (item.subject || "").toString(),
+    senderName:
+      ((item as any).from?.displayName || "").toString(),
+    senderAddress:
+      ((item as any).from?.emailAddress || "").toString(),
+    mailDate:
+      ((item as any).dateTimeCreated || "").toString()
+  };
+}
+
+async function refreshKnownMailIdentity(
+  identity: CurrentMailIdentity,
+  showRepairStatus: boolean
+): Promise<any> {
+  const body = new URLSearchParams();
+
+  if (currentMailNotesId) {
+    body.append("mailNotesId", currentMailNotesId);
+  }
+
+  body.append("messageId", identity.messageId);
+  body.append("itemId", identity.itemId);
+  body.append("conversationId", identity.conversationId);
+  body.append("mailboxAddress", identity.mailboxAddress);
+  body.append("subject", identity.subject);
+  body.append("senderName", identity.senderName);
+  body.append("senderAddress", identity.senderAddress);
+  body.append("mailDate", identity.mailDate);
+
+  const response = await fetch(
+    AgentUrl + "/mail/refresh",
+    {
+      method: "POST",
+      body
+    }
+  );
+
+  if (!response.ok) {
+    throw new Error(
+      "Agent returned HTTP " + response.status
+    );
+  }
+
+  const result = await response.json();
+
+  if (result.found && result.mailNotesId) {
+    currentMailNotesId = result.mailNotesId.toString();
+  }
+
+  if (showRepairStatus && result.updated) {
+    setShlStatus("repaired");
+  }
+
+  return result;
+}
+
+function setShlStatus(
+  state: "active" | "repaired" | "error"
+) {
+  const element = document.getElementById("shl-status");
+
+  if (!element) {
+    return;
+  }
+
+  if (shlStatusResetTimer !== undefined) {
+    window.clearTimeout(shlStatusResetTimer);
+    shlStatusResetTimer = undefined;
+  }
+
+  element.className = "shl-status " + state;
+
+  if (state === "repaired") {
+    element.textContent = "🟢 SHL aktiv · Mail aktualisiert";
+    element.title =
+      "Die technische Outlook-ID der verschobenen Mail wurde aktualisiert. Links und Backlinks sind wieder gültig.";
+
+    shlStatusResetTimer = window.setTimeout(() => {
+      setShlStatus("active");
+    }, 3500);
+
+    return;
+  }
+
+  if (state === "error") {
+    element.textContent = "🟠 SHL gestört";
+    element.title =
+      "Die automatische Aktualisierung konnte den MailNotesAgent nicht erreichen.";
+    return;
+  }
+
+  element.textContent = "🟢 SHL aktiv";
+  element.title =
+    "MailNotes aktualisiert bekannte Mails automatisch bei einem echten Outlook-Kontextwechsel.";
+}
+
 function clearCurrentMailDisplay() {
+  currentMailNotesId = "";
+
   setText("mail-subject", "");
   setText("mail-from", "");
   setText("mail-date", "");
@@ -257,6 +388,26 @@ async function loadNote(
       return;
     }
 
+    // Die MailNotesID wird auch für bekannte Mails ohne eigene Notiz
+    // vom Agent geliefert. Erst danach darf SHL die technischen IDs
+    // aktualisieren.
+    currentMailNotesId =
+      note.mailNotesId || "";
+
+    const identity = getCurrentMailSnapshot();
+
+    // /mail/refresh dient zugleich als Ensure-Mail-Aufruf: Eine bisher
+    // unbekannte Mail wird in der Mail-Tabelle registriert und erhält eine
+    // MailNotesID. Eine leere Notiz wird dabei ausdrücklich nicht erzeugt.
+    if (identity) {
+      try {
+        await refreshKnownMailIdentity(identity, true);
+      } catch (refreshError) {
+        log("SHL refresh fehlgeschlagen:", refreshError);
+        setShlStatus("error");
+      }
+    }
+
     if (note.found) {
       setEditorText(
         "note-content",
@@ -293,7 +444,7 @@ async function loadNote(
     }
 
     await renderBacklinks(
-      messageId,
+      currentMailNotesId || messageId,
       expectedSequence
     );
 
@@ -346,6 +497,12 @@ async function saveNote() {
   const senderName =
     (item as any).from?.displayName || "";
 
+  const senderAddress =
+    (item as any).from?.emailAddress || "";
+
+  const mailboxAddress =
+    Office.context.mailbox.userProfile?.emailAddress || "";
+
   const mailDate =
     (item as any).dateTimeCreated || "";
 
@@ -363,6 +520,13 @@ async function saveNote() {
 
   const body =
     new URLSearchParams();
+
+  if (currentMailNotesId) {
+    body.append(
+      "mailNotesId",
+      currentMailNotesId
+    );
+  }
 
   body.append(
     "messageId",
@@ -387,6 +551,16 @@ async function saveNote() {
   body.append(
     "senderName",
     senderName
+  );
+
+  body.append(
+    "senderAddress",
+    senderAddress
+  );
+
+  body.append(
+    "mailboxAddress",
+    mailboxAddress
   );
 
   body.append(
@@ -437,6 +611,15 @@ async function saveNote() {
       response.status
     );
   }
+
+  const result = JSON.parse(responseText);
+
+  if (result.mailNotesId) {
+    currentMailNotesId =
+      result.mailNotesId.toString();
+  }
+
+  return result;
 }
 
 async function getNote(
@@ -598,9 +781,11 @@ async function rememberCurrentMailLink() {
       "Mail-Link wird gemerkt …"
     );
 
-    await saveNote();
-
+    // Der LinkBuffer registriert eine bisher unbekannte Mail selbst
+    // in der Mail-Tabelle und erzeugt dabei ihre MailNotesID. Eine
+    // sichtbare oder leere Notiz ist dafür ausdrücklich nicht nötig.
     await setLinkBuffer({
+      mailNotesId: currentMailNotesId || undefined,
       messageId,
       itemId,
       conversationId,
@@ -861,12 +1046,22 @@ function formatResolvedSubtitle(
 }
 
 async function getBacklinks(
-  messageId: string
+  mailIdentity: string
 ): Promise<any> {
+  const isMailNotesId =
+    isMailNotesIdValue(mailIdentity);
+
+  const parameterName =
+    isMailNotesId
+      ? "mailNotesId"
+      : "messageId";
+
   const url =
     AgentUrl +
-    "/backlinks?messageId=" +
-    encodeURIComponent(messageId);
+    "/backlinks?" +
+    parameterName +
+    "=" +
+    encodeURIComponent(mailIdentity);
 
   log(
     "GET backlinks URL:",
@@ -900,7 +1095,7 @@ async function getBacklinks(
 }
 
 async function renderBacklinks(
-  messageId: string,
+  mailIdentity: string,
   expectedSequence: number = itemChangeSequence
 ) {
   const section =
@@ -919,11 +1114,11 @@ async function renderBacklinks(
 
   try {
     const result =
-      await getBacklinks(messageId);
+      await getBacklinks(mailIdentity);
 
     if (
       expectedSequence !== itemChangeSequence ||
-      getCurrentMessageId() !== messageId
+      getCurrentMailIdentity() !== mailIdentity
     ) {
       return;
     }
@@ -937,13 +1132,15 @@ async function renderBacklinks(
       document.createDocumentFragment();
 
     for (const item of items) {
-      const sourceMessageId =
-        item.messageId || "";
+      const sourceMailIdentity =
+        item.mailNotesId ||
+        item.messageId ||
+        "";
 
       const mailLink =
         "mailnotes:" +
         encodeURIComponent(
-          sourceMessageId
+          sourceMailIdentity
         );
 
       const row =
@@ -962,7 +1159,7 @@ async function renderBacklinks(
         mailLink;
 
       open.title =
-        item.subject || sourceMessageId;
+        item.subject || sourceMailIdentity;
 
       const title =
         document.createElement("span");
@@ -1032,7 +1229,7 @@ async function renderBacklinks(
 
     if (
       expectedSequence !== itemChangeSequence ||
-      getCurrentMessageId() !== messageId
+      getCurrentMailIdentity() !== mailIdentity
     ) {
       return;
     }
@@ -1150,70 +1347,111 @@ async function openMailNotesLink(
     ) {
       await copyMessageIdFallback(
         url,
-        "Mail konnte nicht aufgelöst werden – Message-ID wurde kopiert."
+        "Mail konnte nicht aufgelöst werden."
       );
 
       return;
     }
 
-    const itemId =
+    const storedItemId =
       resolved.itemId
         ? resolved.itemId.toString()
         : "";
 
-    if (!itemId) {
+    if (!storedItemId) {
       await copyMessageIdFallback(
         url,
-        "Keine Item-ID vorhanden – Message-ID wurde kopiert."
+        "Keine Item-ID vorhanden."
       );
 
       return;
     }
 
-    log(
-      "Öffne Item-ID:",
-      itemId
-    );
-
     const mailbox =
       Office.context.mailbox as any;
+
+    const candidates: string[] = [storedItemId];
+
+    // displayMessageFormAsync erwartet je nach Outlook-Client eine
+    // Exchange-/EWS-ID. Falls im Datensatz eine REST-ID gelandet ist,
+    // versuchen wir deshalb zusätzlich die konvertierte EWS-ID.
+    if (
+      typeof mailbox.convertToEwsId ===
+      "function"
+    ) {
+      try {
+        const ewsItemId =
+          mailbox.convertToEwsId(
+            storedItemId
+          );
+
+        if (
+          ewsItemId &&
+          !candidates.includes(ewsItemId)
+        ) {
+          candidates.push(ewsItemId);
+        }
+      } catch (conversionError) {
+        log(
+          "Item-ID konnte nicht in EWS-ID konvertiert werden:",
+          conversionError
+        );
+      }
+    }
+
+    log(
+      "Öffne Mail mit Item-ID-Kandidaten:",
+      candidates
+    );
 
     if (
       typeof mailbox.displayMessageFormAsync ===
       "function"
     ) {
-      mailbox.displayMessageFormAsync(
-        itemId,
-        (result: Office.AsyncResult<void>) => {
-          log(
-            "displayMessageFormAsync:",
-            result
-          );
-
-          if (
-            result.status ===
-            Office.AsyncResultStatus.Failed
-          ) {
-            console.error(
-              "Mail konnte nicht geöffnet werden:",
-              result.error
+      const tryCandidate =
+        (index: number) => {
+          if (index >= candidates.length) {
+            setText(
+              "mail-link-status",
+              "Öffnen fehlgeschlagen – gespeicherte Item-ID ist ungültig."
             );
-
-            void copyMessageIdFallback(
-              url,
-              "Öffnen fehlgeschlagen – Message-ID wurde kopiert."
-            );
-
             return;
           }
 
-          setText(
-            "mail-link-status",
-            ""
-          );
-        }
-      );
+          const candidate = candidates[index];
 
+          mailbox.displayMessageFormAsync(
+            candidate,
+            (result: Office.AsyncResult<void>) => {
+              log(
+                "displayMessageFormAsync:",
+                index,
+                result
+              );
+
+              if (
+                result.status ===
+                Office.AsyncResultStatus.Failed
+              ) {
+                console.error(
+                  "Mail konnte mit Item-ID-Kandidat nicht geöffnet werden:",
+                  candidate,
+                  result.error
+                );
+
+                tryCandidate(index + 1);
+                return;
+              }
+
+              setText(
+                "mail-link-status",
+                ""
+              );
+            }
+          );
+        };
+
+      tryCandidate(0);
       return;
     }
 
@@ -1222,7 +1460,7 @@ async function openMailNotesLink(
       "function"
     ) {
       mailbox.displayMessageForm(
-        itemId
+        candidates[0]
       );
 
       setText(
@@ -1235,7 +1473,7 @@ async function openMailNotesLink(
 
     await copyMessageIdFallback(
       url,
-      "Öffnen wird von Outlook nicht unterstützt – Message-ID wurde kopiert."
+      "Öffnen wird von Outlook nicht unterstützt."
     );
 
   } catch (error) {
@@ -1243,7 +1481,7 @@ async function openMailNotesLink(
 
     await copyMessageIdFallback(
       url,
-      "Öffnen fehlgeschlagen – Message-ID wurde kopiert."
+      "Öffnen fehlgeschlagen."
     );
   }
 }
@@ -1266,6 +1504,21 @@ async function copyMessageIdFallback(
       ""
     );
   }, 5000);
+}
+
+function getCurrentMailIdentity(): string {
+  return (
+    currentMailNotesId ||
+    getCurrentMessageId()
+  );
+}
+
+function isMailNotesIdValue(
+  value: string
+): boolean {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+    value
+  );
 }
 
 function decodeMailNotesMessageId(
@@ -1296,14 +1549,14 @@ async function copyLink(
 }
 
 type LinkBufferData = {
-  messageId: string;
+  mailNotesId?: string;
+  messageId?: string;
   itemId?: string;
   conversationId?: string;
   subject?: string;
   senderName?: string;
   senderAddress?: string;
   mailDate?: string;
-  mailNotesId?: string;
 };
 
 async function setLinkBuffer(
@@ -1312,14 +1565,16 @@ async function setLinkBuffer(
   const body =
     new URLSearchParams();
 
-  body.append("messageId", data.messageId);
+  if (data.mailNotesId) {
+    body.append("mailNotesId", data.mailNotesId);
+  }
+  body.append("messageId", data.messageId || "");
   body.append("itemId", data.itemId || "");
   body.append("conversationId", data.conversationId || "");
   body.append("subject", data.subject || "");
   body.append("senderName", data.senderName || "");
   body.append("senderAddress", data.senderAddress || "");
   body.append("mailDate", data.mailDate || "");
-  body.append("mailNotesId", data.mailNotesId || "");
 
   const response =
     await fetch(
@@ -1360,7 +1615,7 @@ async function getBufferedMailLink(): Promise<string> {
     const buffer =
       await response.json();
 
-    if (!buffer.found || !buffer.messageId) {
+    if (!buffer.found || !buffer.mailNotesId) {
       setText(
         "mail-link-status",
         "Kein Mail-Link gemerkt."
@@ -1372,7 +1627,7 @@ async function getBufferedMailLink(): Promise<string> {
     return (
       "mailnotes:" +
       encodeURIComponent(
-        buffer.messageId.toString()
+        buffer.mailNotesId.toString()
       )
     );
   } catch (error) {
