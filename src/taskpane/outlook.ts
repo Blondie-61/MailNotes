@@ -2,16 +2,42 @@
 
 const AgentUrl = "/api";
 
-const DEBUG = true;
+const ENABLE_LOGGING = false;
 
 let itemChangeSequence = 0;
 let currentMailNotesId = "";
 let shlStatusResetTimer: number | undefined;
+let repairQueueCount = 0;
+let repairHintDismissed = false;
 
 function log(...args: any[]) {
-  if (DEBUG) {
+  if (ENABLE_LOGGING) {
     console.log(...args);
   }
+}
+
+function fileLog(event: string, data?: unknown): void {
+  if (!ENABLE_LOGGING) {
+    return;
+  }
+
+  const body = new URLSearchParams();
+  body.append("event", event);
+
+  if (data !== undefined) {
+    try {
+      body.append("data", JSON.stringify(data));
+    } catch {
+      body.append("data", String(data));
+    }
+  }
+
+  void fetch(AgentUrl + "/log", {
+    method: "POST",
+    body
+  }).catch(() => {
+    // Diagnose-Logging darf die eigentliche Funktion niemals beeinflussen.
+  });
 }
 
 Office.onReady((info) => {
@@ -44,6 +70,7 @@ Office.onReady((info) => {
 
 async function runOutlook() {
   setupButtons();
+  void refreshRepairQueueNotice(true);
 
   const sequence = ++itemChangeSequence;
 
@@ -60,6 +87,7 @@ async function handleItemChanged() {
   clearCurrentMailDisplay();
   showMailInformation();
   await loadNote(sequence);
+  await refreshRepairQueueAfterMailChange();
 }
 
 type CurrentMailIdentity = {
@@ -144,6 +172,13 @@ async function refreshKnownMailIdentity(
   }
 
   if (showRepairStatus && result.updated) {
+    fileLog("SHL repaired", {
+      mailNotesId: result.mailNotesId,
+      oldItemId: result.oldItemId,
+      itemId: result.itemId,
+      messageId: identity.messageId,
+      subject: identity.subject
+    });
     setShlStatus("repaired");
   }
 
@@ -151,7 +186,7 @@ async function refreshKnownMailIdentity(
 }
 
 function setShlStatus(
-  state: "active" | "repaired" | "error"
+  state: "active" | "repaired" | "error" | "pending"
 ) {
   const element = document.getElementById("shl-status");
 
@@ -172,9 +207,19 @@ function setShlStatus(
       "Die technische Outlook-ID der verschobenen Mail wurde aktualisiert. Links und Backlinks sind wieder gültig.";
 
     shlStatusResetTimer = window.setTimeout(() => {
-      setShlStatus("active");
+      setShlStatus(repairQueueCount > 0 ? "pending" : "active");
     }, 3500);
 
+    return;
+  }
+
+  if (state === "pending") {
+    element.textContent = repairQueueCount === 1
+      ? "🟡 SHL aktiv · 1 Reparatur offen"
+      : "🟡 SHL aktiv · " + repairQueueCount + " Reparaturen offen";
+    element.title = repairQueueCount === 1
+      ? "Ein MailLink wartet auf Reparatur. Klicken Sie auf den gelben Hinweis, sobald Sie die Reparatur fortsetzen möchten."
+      : repairQueueCount + " MailLinks warten auf Reparatur.";
     return;
   }
 
@@ -209,6 +254,30 @@ function clearCurrentMailDisplay() {
 
   const linkInput =
     document.getElementById("link-input") as HTMLInputElement;
+
+  const btnOpenRepairQueue = document.getElementById("btn-open-repair-queue");
+  const btnDismissRepairQueue = document.getElementById("btn-dismiss-repair-queue");
+  const btnCloseRepairQueue = document.getElementById("btn-close-repair-queue");
+
+  if (btnOpenRepairQueue) {
+    btnOpenRepairQueue.onclick = () => void showRepairQueue();
+  }
+
+  if (btnDismissRepairQueue) {
+    btnDismissRepairQueue.onclick = () => {
+      repairHintDismissed = true;
+      hideElement("repair-queue-notice");
+      setShlStatus(repairQueueCount > 0 ? "pending" : "active");
+    };
+  }
+
+  if (btnCloseRepairQueue) {
+    btnCloseRepairQueue.onclick = () => {
+      repairHintDismissed = true;
+      hideElement("repair-queue-card");
+      setShlStatus(repairQueueCount > 0 ? "pending" : "active");
+    };
+  }
 
   if (linkInput) {
     linkInput.value = "";
@@ -404,6 +473,11 @@ async function loadNote(
         await refreshKnownMailIdentity(identity, true);
       } catch (refreshError) {
         log("SHL refresh fehlgeschlagen:", refreshError);
+        fileLog("mail/refresh error", {
+          message: refreshError instanceof Error
+            ? refreshError.message
+            : String(refreshError)
+        });
         setShlStatus("error");
       }
     }
@@ -1413,8 +1487,9 @@ async function openMailNotesLink(
           if (index >= candidates.length) {
             setText(
               "mail-link-status",
-              "Öffnen fehlgeschlagen – gespeicherte Item-ID ist ungültig."
+              "Öffnen fehlgeschlagen – Link wurde zur Reparatur vorgemerkt."
             );
+            void addRepairQueueItem(resolved, storedItemId);
             return;
           }
 
@@ -1917,4 +1992,299 @@ function setText(
     value
       ? value.toString()
       : "–";
+}
+
+type RepairQueueItem = {
+  id: number;
+  mailNotesId: string;
+  oldItemId: string;
+  messageId: string;
+  subject: string;
+  senderName: string;
+  senderAddress: string;
+  mailDate: string;
+  retryCount: number;
+  status: number;
+};
+
+async function addRepairQueueItem(resolved: any, oldItemId: string): Promise<void> {
+  const body = new URLSearchParams();
+  body.append("mailNotesId", (resolved.mailNotesId || "").toString());
+  body.append("oldItemId", oldItemId);
+  body.append("messageId", (resolved.messageId || "").toString());
+  const queueMeta = parseResolvedRepairMetadata(resolved.subtitle);
+
+  body.append("subject", (resolved.title || "").toString());
+  body.append("senderName", queueMeta.senderName);
+  body.append("mailDate", queueMeta.mailDate);
+  body.append("reason", "stored_item_id_invalid");
+
+  const response = await fetch(AgentUrl + "/repairqueue", { method: "POST", body });
+  if (!response.ok) {
+    throw new Error("Repair queue returned HTTP " + response.status);
+  }
+  repairHintDismissed = false;
+  await refreshRepairQueueNotice(true);
+}
+
+async function refreshRepairQueueNotice(forceShow = false): Promise<number> {
+  try {
+    const response = await fetch(AgentUrl + "/repairqueue/count");
+    if (!response.ok) return -1;
+
+    const result = await response.json();
+    const count = Number(result.count || 0);
+    repairQueueCount = count;
+    const notice = document.getElementById("repair-queue-notice");
+
+    if (count === 0) {
+      finishRepairQueue();
+      return 0;
+    }
+
+    setShlStatus("pending");
+
+    if (forceShow) {
+      repairHintDismissed = false;
+    }
+
+    if (notice) {
+      notice.hidden = repairHintDismissed;
+    }
+
+    setText("repair-queue-notice-text", count === 1
+      ? "Ein Mail-Link ist derzeit nicht erreichbar. Outlook vor der Reparatur neu starten."
+      : count + " Mail-Links sind derzeit nicht erreichbar. Outlook vor der Reparatur neu starten.");
+
+    return count;
+  } catch {
+    // Der Hinweis ist Komfortfunktion; Agentfehler werden über SHL angezeigt.
+    return -1;
+  }
+}
+
+async function refreshRepairQueueAfterMailChange(): Promise<void> {
+  const card = document.getElementById("repair-queue-card");
+  const repairQueueWasOpen = !!card && !card.hidden;
+  const count = await refreshRepairQueueNotice(false);
+
+  if (count <= 0) {
+    return;
+  }
+
+  if (repairQueueWasOpen) {
+    await showRepairQueue();
+  }
+}
+
+function finishRepairQueue(): void {
+  repairQueueCount = 0;
+  repairHintDismissed = false;
+  hideElement("repair-queue-notice");
+  hideElement("repair-queue-card");
+  setShlStatus("active");
+
+  const list = document.getElementById("repair-queue-list");
+  if (list) {
+    list.innerHTML = "";
+  }
+}
+
+async function showRepairQueue(): Promise<void> {
+  const response = await fetch(AgentUrl + "/repairqueue");
+  if (!response.ok) throw new Error("Repair queue returned HTTP " + response.status);
+  const result = await response.json();
+  const items = (result.items || []) as RepairQueueItem[];
+  const list = document.getElementById("repair-queue-list");
+  if (!list) return;
+
+  if (items.length === 0) {
+    finishRepairQueue();
+    return;
+  }
+
+  repairHintDismissed = true;
+  hideElement("repair-queue-notice");
+  list.innerHTML = "";
+
+  for (const item of items) {
+    const row = document.createElement("div");
+    row.className = "repair-item";
+
+    const title = document.createElement("div");
+    title.className = "repair-item-title";
+    title.textContent = item.subject || "(ohne Betreff)";
+    row.appendChild(title);
+
+    const meta = document.createElement("div");
+    meta.className = "repair-item-meta";
+    meta.textContent = [item.senderName, formatDate(item.mailDate)].filter(Boolean).join(" · ");
+    row.appendChild(meta);
+
+    const actions = document.createElement("div");
+    actions.className = "repair-item-actions";
+
+    const searchFeedback = document.createElement("div");
+    searchFeedback.className = "repair-search-feedback";
+    searchFeedback.hidden = true;
+
+    const searchButton = document.createElement("button");
+    searchButton.type = "button";
+    searchButton.textContent = "Mail für Reparatur auswählen";
+
+    const searchText = buildOutlookSearchText(item);
+    if (!searchText) {
+      searchButton.disabled = true;
+      searchButton.title = "Für diese Mail sind weder Betreff, Absender noch Empfangsdatum gespeichert.";
+      searchFeedback.textContent =
+        "Für diese Mail konnte kein brauchbarer Outlook-Suchtext erzeugt werden. " +
+        "Bitte anhand der angezeigten Angaben manuell suchen.";
+      searchFeedback.hidden = false;
+    } else {
+      searchButton.onclick = async () => {
+        if (!navigator.clipboard) {
+          searchFeedback.textContent =
+            "Der Suchtext konnte nicht automatisch kopiert werden: „" + searchText + "“.";
+          searchFeedback.hidden = false;
+          return;
+        }
+
+        await navigator.clipboard.writeText(searchText);
+
+        searchButton.textContent = "Suchtext erneut kopieren";
+        searchFeedback.textContent =
+          "Für die Outlook-Suche kopiert: „" + searchText + "“. " +
+          "Oben in Outlook einfügen und die passende Mail öffnen. " +
+          "MailNotes repariert den Link anschließend automatisch.";
+        searchFeedback.hidden = false;
+      };
+    }
+    actions.appendChild(searchButton);
+
+    const skipButton = document.createElement("button");
+    skipButton.type = "button";
+    skipButton.textContent = "Überspringen";
+    skipButton.onclick = async () => {
+      await setRepairQueueStatus(item.id, 3);
+      await showRepairQueue();
+      await refreshRepairQueueNotice();
+    };
+    actions.appendChild(skipButton);
+
+    row.appendChild(actions);
+    row.appendChild(searchFeedback);
+    list.appendChild(row);
+  }
+
+  const card = document.getElementById("repair-queue-card");
+  if (card) card.hidden = false;
+}
+
+
+function buildOutlookSearchText(item: RepairQueueItem): string {
+  const subject = sanitizeOutlookSearchValue(item.subject || "");
+  const sender = sanitizeOutlookSearchValue(
+    extractRepairQueueSender(item.senderName || item.senderAddress || "")
+  );
+
+  const parts: string[] = [];
+
+  if (subject) {
+    parts.push('subject:"' + subject + '"');
+  }
+
+  if (sender) {
+    parts.push('from:"' + sender + '"');
+  }
+
+  // Sind Betreff oder Absender vorhanden, werden ausschließlich diese
+  // verwertbaren Parameter verwendet. Das Datum ist nur der letzte Fallback.
+  if (parts.length > 0) {
+    return parts.join(" ");
+  }
+
+  const receivedDate = buildOutlookReceivedDate(
+    item.mailDate || extractRepairQueueDate(item.senderName || "")
+  );
+
+  return receivedDate
+    ? 'received:"' + receivedDate + '"'
+    : "";
+}
+
+function parseResolvedRepairMetadata(value: any): {
+  senderName: string;
+  mailDate: string;
+} {
+  const subtitle = value ? value.toString().trim() : "";
+  if (!subtitle) {
+    return { senderName: "", mailDate: "" };
+  }
+
+  const separatorIndex = subtitle.indexOf(" · ");
+  if (separatorIndex < 0) {
+    return { senderName: subtitle, mailDate: "" };
+  }
+
+  const senderName = subtitle.substring(0, separatorIndex).trim();
+  const dateText = subtitle.substring(separatorIndex + 3).trim();
+  const parsedDate = new Date(dateText);
+
+  return {
+    senderName,
+    mailDate: Number.isNaN(parsedDate.getTime()) ? dateText : parsedDate.toISOString()
+  };
+}
+
+function extractRepairQueueSender(value: string): string {
+  const sender = value.trim();
+  const separatorIndex = sender.indexOf(" · ");
+
+  return separatorIndex >= 0
+    ? sender.substring(0, separatorIndex).trim()
+    : sender;
+}
+
+function extractRepairQueueDate(value: string): string {
+  const separatorIndex = value.indexOf(" · ");
+  return separatorIndex >= 0
+    ? value.substring(separatorIndex + 3).trim()
+    : "";
+}
+
+function buildOutlookReceivedDate(value: string): string {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return "";
+  }
+
+  const date = new Date(trimmed);
+  if (Number.isNaN(date.getTime())) {
+    return sanitizeOutlookSearchValue(trimmed);
+  }
+
+  return String(date.getDate()).padStart(2, "0") + "." +
+    String(date.getMonth() + 1).padStart(2, "0") + "." +
+    date.getFullYear();
+}
+
+function sanitizeOutlookSearchValue(value: string): string {
+  return value
+    .trim()
+    .replace(/[\r\n\t]+/g, " ")
+    .replace(/\s{2,}/g, " ")
+    .replace(/"/g, "");
+}
+
+async function setRepairQueueStatus(id: number, status: number): Promise<void> {
+  const body = new URLSearchParams();
+  body.append("id", id.toString());
+  body.append("status", status.toString());
+  const response = await fetch(AgentUrl + "/repairqueue/status", { method: "POST", body });
+  if (!response.ok) throw new Error("Repair queue returned HTTP " + response.status);
+}
+
+function hideElement(id: string): void {
+  const element = document.getElementById(id);
+  if (element) element.hidden = true;
 }

@@ -485,3 +485,81 @@ button:disabled {
     cursor: default;
     opacity: 0.55;
 }
+
+.repair-queue-notice {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin-bottom: 16px;
+    padding: 12px 14px;
+    border: 1px solid #e2b203;
+    border-radius: 12px;
+    background: #fff8d6;
+    font-size: 13px;
+}
+
+.repair-queue-notice[hidden],
+#repair-queue-card[hidden] {
+    display: none;
+}
+
+.repair-queue-notice > div {
+    flex: 1;
+    min-width: 190px;
+}
+
+.repair-help {
+    margin: 0 0 12px;
+    color: #6e6e73;
+    font-size: 13px;
+    line-height: 1.4;
+}
+
+.repair-item {
+    padding: 12px 0;
+    border-top: 1px solid #eeeeef;
+}
+
+.repair-item-title {
+    font-weight: 600;
+    word-break: break-word;
+}
+
+.repair-item-meta {
+    margin-top: 4px;
+    color: #6e6e73;
+    font-size: 12px;
+}
+
+.repair-top-actions,
+.repair-item-actions {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
+}
+
+.repair-top-actions {
+    margin: 8px 0 12px;
+}
+
+.repair-item-actions {
+    margin-top: 10px;
+}
+
+.repair-search-feedback {
+    margin-top: 10px;
+    padding: 10px 12px;
+    color: #5f4700;
+    background: #fff7d6;
+    border: 1px solid #ead58a;
+    border-radius: 9px;
+    font-size: 12px;
+    line-height: 1.45;
+    word-break: break-word;
+}
+
+.shl-status.pending {
+    color: inherit;
+}

@@ -38,6 +38,22 @@
             </div>
         </header>
 
+        <section id="repair-queue-notice" class="repair-queue-notice" hidden>
+            <div>
+                <strong>MailLinks müssen repariert werden.</strong>
+                <div id="repair-queue-notice-text"></div>
+            </div>
+            <button id="btn-open-repair-queue" type="button">Jetzt reparieren</button>
+            <button id="btn-dismiss-repair-queue" type="button">Später</button>
+        </section>
+
+        <section id="repair-queue-card" class="card" hidden>
+            <div class="section-title">SHL-Reparaturwarteschlange</div>
+            <div class="repair-top-actions"><button id="btn-close-repair-queue" type="button">Auf später verschieben</button></div>
+            <p class="repair-help">Outlook muss nach dem Verschieben der Mail neu gestartet worden sein. Wählen Sie einen Eintrag. MailNotes kopiert einen passenden Suchtext. Fügen Sie ihn in die Outlook-Suche ein und öffnen Sie die gefundene Mail; der Link wird dann automatisch repariert.</p>
+            <div id="repair-queue-list"></div>
+        </section>
+
         <section class="card">
 
             <div class="field">
