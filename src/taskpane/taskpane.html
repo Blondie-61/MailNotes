@@ -38,6 +38,22 @@
             </div>
         </header>
 
+        <section class="card search-card">
+            <div class="section-title search-title">MailNotes durchsuchen</div>
+            <div class="search-input-row">
+                <input
+                    id="search-input"
+                    class="search-input"
+                    type="search"
+                    placeholder="Wörter aus Notiz, Betreff oder Absender"
+                    autocomplete="off"
+                    spellcheck="false" />
+                <button id="btn-clear-search" class="search-clear-button" type="button" title="Suche leeren">×</button>
+            </div>
+            <div id="search-status" class="search-status"></div>
+            <div id="search-results" class="search-results" hidden></div>
+        </section>
+
         <section id="repair-queue-notice" class="repair-queue-notice" hidden>
             <div>
                 <strong>MailLinks müssen repariert werden.</strong>
@@ -152,17 +168,8 @@
 
             </div>
 
-            <div class="button-row">
-
-                <button
-                    id="btn-save"
-                    type="button">
-                    💾 Speichern
-                </button>
-
-            </div>
-
             <div class="note-meta">
+                <div id="autosave-status" class="autosave-status" aria-live="polite"></div>
                 <div>
                     Erstellt:
                     <span id="note-created">–</span>

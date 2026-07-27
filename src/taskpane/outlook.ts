@@ -9,6 +9,17 @@ let currentMailNotesId = "";
 let shlStatusResetTimer: number | undefined;
 let repairQueueCount = 0;
 let repairHintDismissed = false;
+let searchTimer: number | undefined;
+let searchSequence = 0;
+
+const AUTOSAVE_DELAY_MS = 800;
+let autosaveTimer: number | undefined;
+let autosaveRevision = 0;
+let autosaveCompletedRevision = 0;
+let autosaveInProgress = false;
+let autosaveActivePromise: Promise<boolean> | null = null;
+let autosaveSuppressed = false;
+let autosavePendingSnapshot: NoteSaveSnapshot | null = null;
 
 function log(...args: any[]) {
   if (ENABLE_LOGGING) {
@@ -80,6 +91,7 @@ async function runOutlook() {
 }
 
 async function handleItemChanged() {
+  await requestAutosave(true);
   const sequence = ++itemChangeSequence;
 
   log("ItemChanged", sequence);
@@ -236,6 +248,7 @@ function setShlStatus(
 }
 
 function clearCurrentMailDisplay() {
+  cancelPendingAutosave();
   currentMailNotesId = "";
 
   setText("mail-subject", "");
@@ -294,8 +307,8 @@ function clearCurrentMailDisplay() {
 }
 
 function setupButtons() {
-  const btnSave =
-    document.getElementById("btn-save");
+  const noteContent =
+    document.getElementById("note-content") as HTMLTextAreaElement;
 
   const btnAddLink =
     document.getElementById("btn-add-link");
@@ -306,25 +319,25 @@ function setupButtons() {
   const linkInput =
     document.getElementById("link-input") as HTMLInputElement;
 
-  if (btnSave) {
-    btnSave.onclick = async () => {
-      try {
-        await saveNote();
-        await loadNote();
-      } catch (error) {
-        console.error(error);
+  const searchInput =
+    document.getElementById("search-input") as HTMLInputElement;
 
-        setText(
-          "mail-link-status",
-          "Speichern fehlgeschlagen."
-        );
-      }
+  const btnClearSearch =
+    document.getElementById("btn-clear-search");
+
+  if (noteContent) {
+    noteContent.oninput = () => {
+      scheduleAutosave();
+    };
+
+    noteContent.onblur = () => {
+      void requestAutosave(true);
     };
   }
 
   if (btnAddLink) {
     btnAddLink.onclick = () => {
-    void addLinkFromInput();
+      void addLinkFromInput();
     };
   }
 
@@ -334,15 +347,172 @@ function setupButtons() {
     };
   }
 
-if (linkInput) {
-  linkInput.onkeydown = (event) => {
-    if (event.key === "Enter") {
-      event.preventDefault();
-      void addLinkFromInput();
-    }
-  };
+  if (linkInput) {
+    linkInput.onkeydown = (event) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        void addLinkFromInput();
+      }
+    };
+  }
+
+  if (searchInput) {
+    searchInput.oninput = () => {
+      scheduleSearch(searchInput.value);
+    };
+
+    searchInput.onkeydown = (event) => {
+      if (event.key === "Escape") {
+        clearSearch();
+      }
+    };
+  }
+
+  if (btnClearSearch) {
+    btnClearSearch.onclick = clearSearch;
+  }
 }
 
+type SearchResultItem = {
+  mailNotesId: string;
+  messageId: string;
+  itemId: string;
+  subject: string;
+  senderName: string;
+  senderAddress: string;
+  mailDate: string;
+  modifiedAt: string;
+  snippet: string;
+};
+
+function scheduleSearch(searchText: string): void {
+  if (searchTimer !== undefined) {
+    window.clearTimeout(searchTimer);
+  }
+
+  const trimmed = searchText.trim();
+  if (!trimmed) {
+    clearSearchResults();
+    return;
+  }
+
+  setText("search-status", "Suche …");
+  searchTimer = window.setTimeout(() => {
+    void searchNotes(trimmed);
+  }, 250);
+}
+
+function clearSearch(): void {
+  const input = document.getElementById("search-input") as HTMLInputElement;
+  if (input) {
+    input.value = "";
+    input.focus();
+  }
+
+  if (searchTimer !== undefined) {
+    window.clearTimeout(searchTimer);
+    searchTimer = undefined;
+  }
+
+  searchSequence++;
+  clearSearchResults();
+}
+
+function clearSearchResults(): void {
+  const results = document.getElementById("search-results");
+  if (results) {
+    results.innerHTML = "";
+    results.hidden = true;
+  }
+  setText("search-status", "");
+}
+
+async function searchNotes(searchText: string): Promise<void> {
+  const sequence = ++searchSequence;
+
+  try {
+    const response = await fetch(
+      AgentUrl + "/search?q=" + encodeURIComponent(searchText) + "&limit=50"
+    );
+
+    if (!response.ok) {
+      throw new Error("Agent returned HTTP " + response.status);
+    }
+
+    const result = await response.json();
+    if (sequence !== searchSequence) {
+      return;
+    }
+
+    const items: SearchResultItem[] = Array.isArray(result.items)
+      ? result.items
+      : [];
+
+    renderSearchResults(items);
+  } catch (error) {
+    console.error("MailNotes-Suche fehlgeschlagen:", error);
+    if (sequence === searchSequence) {
+      clearSearchResults();
+      setText("search-status", "Suche nicht verfügbar.");
+    }
+  }
+}
+
+function renderSearchResults(items: SearchResultItem[]): void {
+  const results = document.getElementById("search-results");
+  if (!results) {
+    return;
+  }
+
+  results.innerHTML = "";
+  results.hidden = false;
+
+  if (items.length === 0) {
+    setText("search-status", "Keine Treffer.");
+    return;
+  }
+
+  setText(
+    "search-status",
+    items.length === 1 ? "1 Treffer" : items.length + " Treffer"
+  );
+
+  const fragment = document.createDocumentFragment();
+
+  for (const item of items) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "search-result";
+
+    const subject = document.createElement("span");
+    subject.className = "search-result-subject";
+    subject.textContent = item.subject || "(Ohne Betreff)";
+    button.appendChild(subject);
+
+    const meta = document.createElement("span");
+    meta.className = "search-result-meta";
+    const sender = item.senderName || item.senderAddress || "Unbekannter Absender";
+    meta.textContent = sender + (item.mailDate ? " · " + formatDate(item.mailDate) : "");
+    button.appendChild(meta);
+
+    if (item.snippet) {
+      const snippet = document.createElement("span");
+      snippet.className = "search-result-snippet";
+      snippet.textContent = item.snippet;
+      button.appendChild(snippet);
+    }
+
+    button.onclick = () => {
+      const token = item.mailNotesId || item.messageId;
+      if (token) {
+        void openMailNotesLink("mailnotes:" + encodeURIComponent(token));
+      }
+    };
+
+    fragment.appendChild(button);
+  }
+
+  results.appendChild(fragment);
 }
 
 function showMailInformation() {
@@ -511,6 +681,9 @@ async function loadNote(
       setNoteMeta("", "");
     }
 
+    autosaveCompletedRevision = autosaveRevision;
+    setAutosaveStatus("");
+
     await renderLinks(expectedSequence);
 
     if (expectedSequence !== itemChangeSequence) {
@@ -546,154 +719,198 @@ async function loadNote(
   }
 }
 
-async function saveNote() {
-  const item =
-    Office.context.mailbox.item;
+type NoteSaveSnapshot = CurrentMailIdentity & {
+  mailNotesId: string;
+  content: string;
+  links: string;
+  sequence: number;
+  revision: number;
+};
 
-  if (!item) {
-    throw new Error(
-      "Keine Mail ausgewählt."
-    );
+function cancelPendingAutosave(): void {
+  if (autosaveTimer !== undefined) {
+    window.clearTimeout(autosaveTimer);
+    autosaveTimer = undefined;
   }
 
-  const messageId =
-    (item as any).internetMessageId;
+  autosaveRevision++;
+  autosaveCompletedRevision = autosaveRevision;
+  autosavePendingSnapshot = null;
+  setAutosaveStatus("");
+}
 
-  const conversationId =
-    (item as any).conversationId;
-
-  const itemId =
-    (item as any).itemId || "";
-
-  const subject =
-    item.subject || "";
-
-  const senderName =
-    (item as any).from?.displayName || "";
-
-  const senderAddress =
-    (item as any).from?.emailAddress || "";
-
-  const mailboxAddress =
-    Office.context.mailbox.userProfile?.emailAddress || "";
-
-  const mailDate =
-    (item as any).dateTimeCreated || "";
-
-  const content =
-    getEditorText("note-content");
-
-  const links =
-    getEditorText("note-links");
-
-  if (!messageId) {
-    throw new Error(
-      "Keine Message-ID vorhanden."
-    );
+function scheduleAutosave(): void {
+  if (autosaveSuppressed) {
+    return;
   }
 
-  const body =
-    new URLSearchParams();
+  autosaveRevision++;
+  autosavePendingSnapshot = createNoteSaveSnapshot(autosaveRevision);
+  setAutosaveStatus("Nicht gespeichert");
 
-  if (currentMailNotesId) {
-    body.append(
-      "mailNotesId",
-      currentMailNotesId
-    );
+  if (autosaveTimer !== undefined) {
+    window.clearTimeout(autosaveTimer);
   }
 
-  body.append(
-    "messageId",
-    messageId
-  );
+  autosaveTimer = window.setTimeout(() => {
+    autosaveTimer = undefined;
+    void requestAutosave(false);
+  }, AUTOSAVE_DELAY_MS);
+}
 
-  body.append(
-    "conversationId",
-    conversationId || ""
-  );
+async function requestAutosave(immediate: boolean): Promise<boolean> {
+  if (autosaveSuppressed || autosaveRevision <= autosaveCompletedRevision) {
+    return true;
+  }
 
-  body.append(
-    "itemId",
-    itemId
-  );
+  if (immediate && autosaveTimer !== undefined) {
+    window.clearTimeout(autosaveTimer);
+    autosaveTimer = undefined;
+  }
 
-  body.append(
-    "subject",
-    subject
-  );
+  if (autosaveActivePromise) {
+    const previousResult = await autosaveActivePromise;
 
-  body.append(
-    "senderName",
-    senderName
-  );
+    if (!previousResult) {
+      return false;
+    }
 
-  body.append(
-    "senderAddress",
-    senderAddress
-  );
+    if (autosaveRevision <= autosaveCompletedRevision) {
+      return true;
+    }
+  }
 
-  body.append(
-    "mailboxAddress",
-    mailboxAddress
-  );
+  autosaveActivePromise = drainAutosave();
 
-  body.append(
-    "mailDate",
-    mailDate
-  );
+  try {
+    return await autosaveActivePromise;
+  } finally {
+    autosaveActivePromise = null;
+  }
+}
 
-  body.append(
-    "content",
-    content
-  );
+async function drainAutosave(): Promise<boolean> {
+  autosaveInProgress = true;
 
-  body.append(
-    "links",
-    links
-  );
+  try {
+    while (autosaveCompletedRevision < autosaveRevision) {
+      const revision = autosaveRevision;
+      const snapshot = autosavePendingSnapshot;
 
-  log(
-    "POST body:",
-    body.toString()
-  );
-
-  const response =
-    await fetch(
-      AgentUrl + "/note",
-      {
-        method: "POST",
-        body: body
+      if (!snapshot) {
+        autosaveCompletedRevision = revision;
+        return true;
       }
-    );
 
-  const responseText =
-    await response.text();
+      setAutosaveStatus("Speichert …");
 
-  log(
-    "SAVE status:",
-    response.status
-  );
+      try {
+        const result = await saveNoteSnapshot(snapshot);
+        autosaveCompletedRevision = revision;
 
-  log(
-    "SAVE response:",
-    responseText
-  );
+        if (autosavePendingSnapshot?.revision === revision) {
+          autosavePendingSnapshot = null;
+        }
+
+        if (snapshot.sequence === itemChangeSequence) {
+          if (result.mailNotesId) {
+            currentMailNotesId = result.mailNotesId.toString();
+          }
+
+          updateNoteMetaAfterSave(result);
+          setAutosaveStatus(
+            autosaveCompletedRevision < autosaveRevision
+              ? "Speichert …"
+              : "Gespeichert"
+          );
+        }
+      } catch (error) {
+        if (snapshot.sequence === itemChangeSequence) {
+          setAutosaveStatus("Speichern fehlgeschlagen");
+        }
+
+        console.error(error);
+        return false;
+      }
+    }
+
+    return true;
+  } finally {
+    autosaveInProgress = false;
+  }
+}
+
+function createNoteSaveSnapshot(revision: number): NoteSaveSnapshot | null {
+  const identity = getCurrentMailSnapshot();
+
+  if (!identity) {
+    return null;
+  }
+
+  return {
+    ...identity,
+    mailNotesId: currentMailNotesId,
+    content: getEditorText("note-content"),
+    links: getEditorText("note-links"),
+    sequence: itemChangeSequence,
+    revision
+  };
+}
+
+
+function updateNoteMetaAfterSave(result: any): void {
+  const createdElement = document.getElementById("note-created");
+  const currentCreated = createdElement?.textContent || "";
+  const now = new Date().toISOString();
+
+  if (result.createdAt) {
+    setText("note-created", formatDate(result.createdAt));
+  } else if (!currentCreated || currentCreated === "–") {
+    setText("note-created", formatDate(now));
+  }
+
+  setText("note-modified", formatDate(result.modifiedAt || now));
+}
+
+function setAutosaveStatus(text: string): void {
+  setText("autosave-status", text);
+}
+
+async function saveNoteSnapshot(snapshot: NoteSaveSnapshot): Promise<any> {
+  const body = new URLSearchParams();
+
+  if (snapshot.mailNotesId) {
+    body.append("mailNotesId", snapshot.mailNotesId);
+  }
+
+  body.append("messageId", snapshot.messageId);
+  body.append("conversationId", snapshot.conversationId);
+  body.append("itemId", snapshot.itemId);
+  body.append("subject", snapshot.subject);
+  body.append("senderName", snapshot.senderName);
+  body.append("senderAddress", snapshot.senderAddress);
+  body.append("mailboxAddress", snapshot.mailboxAddress);
+  body.append("mailDate", snapshot.mailDate);
+  body.append("content", snapshot.content);
+  body.append("links", snapshot.links);
+
+  log("POST body:", body.toString());
+
+  const response = await fetch(AgentUrl + "/note", {
+    method: "POST",
+    body
+  });
+
+  const responseText = await response.text();
+
+  log("SAVE status:", response.status);
+  log("SAVE response:", responseText);
 
   if (!response.ok) {
-    throw new Error(
-      "Agent returned HTTP " +
-      response.status
-    );
+    throw new Error("Agent returned HTTP " + response.status);
   }
 
-  const result = JSON.parse(responseText);
-
-  if (result.mailNotesId) {
-    currentMailNotesId =
-      result.mailNotesId.toString();
-  }
-
-  return result;
+  return JSON.parse(responseText);
 }
 
 async function getNote(
@@ -781,12 +998,13 @@ async function addLinkFromInput() {
   await renderLinks();
 
   try {
-    await saveNote();
-    await loadNote();
+    autosaveRevision++;
+    autosavePendingSnapshot = createNoteSaveSnapshot(autosaveRevision);
+    const saved = await requestAutosave(true);
 
     setText(
       "mail-link-status",
-      "Link hinzugefügt und gespeichert."
+      saved ? "Link hinzugefügt." : "Link hinzugefügt, Speichern fehlgeschlagen."
     );
 
     window.setTimeout(() => {
@@ -1762,7 +1980,13 @@ async function deleteLink(
   );
 
   try {
-    await saveNote();
+    autosaveRevision++;
+    autosavePendingSnapshot = createNoteSaveSnapshot(autosaveRevision);
+    const saved = await requestAutosave(true);
+
+    if (!saved) {
+      throw new Error("Link konnte nicht gespeichert werden.");
+    }
 
     if (
       expectedSequence !==
@@ -2082,7 +2306,14 @@ function finishRepairQueue(): void {
   repairHintDismissed = false;
   hideElement("repair-queue-notice");
   hideElement("repair-queue-card");
-  setShlStatus("active");
+
+  // Eine gerade gesetzte Erfolgsmeldung darf durch die anschließende
+  // Queue-Bereinigung nicht sofort wieder überschrieben werden.
+  // Der Timer in setShlStatus("repaired") stellt den normalen Status
+  // nach 3,5 Sekunden selbst wieder her.
+  if (shlStatusResetTimer === undefined) {
+    setShlStatus("active");
+  }
 
   const list = document.getElementById("repair-queue-list");
   if (list) {
