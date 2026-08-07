@@ -5,6 +5,12 @@
 Database/
 
 # -------------------------
+# Office-Entwicklungszertifikate (falls künftig lokal erzeugt)
+# -------------------------
+
+.office-addin-dev-certs/
+
+# -------------------------
 # Node.js
 # -------------------------
 
