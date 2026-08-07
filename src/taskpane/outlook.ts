@@ -1,8 +1,9 @@
-/* global Office, document, window, navigator */
+﻿/* global Office, document, window, navigator */
 
-const AgentUrl = "/api";
+import { MailNotesConfig } from "../config";
 
-const ENABLE_LOGGING = false;
+const AgentUrl = MailNotesConfig.agentUrl;
+const ENABLE_LOGGING = MailNotesConfig.enableLogging;
 
 let itemChangeSequence = 0;
 let currentMailNotesId = "";
