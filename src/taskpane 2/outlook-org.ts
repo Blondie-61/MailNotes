@@ -701,14 +701,9 @@ async function loadNote(
       return;
     }
 
-    const errorMessage =
-      error instanceof Error
-        ? error.message
-        : String(error);
-
     setEditorText(
       "note-content",
-      "MailNotesAgent-Fehler: " + errorMessage
+      "MailNotesAgent nicht erreichbar."
     );
 
     setEditorText(
@@ -721,12 +716,7 @@ async function loadNote(
     await renderLinks(expectedSequence);
     clearBacklinks();
 
-    fileLog("loadNote error", {
-      messageId,
-      error: errorMessage
-    });
-
-    console.error("loadNote fehlgeschlagen:", error);
+    console.error(error);
   }
 }
 
@@ -937,22 +927,8 @@ async function getNote(
     url
   );
 
-  let response: Response;
-
-  try {
-    response = await fetch(url, {
-      targetAddressSpace: "loopback"
-    } as RequestInit);
-  } catch (error) {
-    const message =
-      error instanceof Error
-        ? error.message
-        : String(error);
-
-    throw new Error(
-      "GET /note: Netzwerkfehler – " + message
-    );
-  }
+  const response =
+    await fetch(url);
 
   const responseText =
     await response.text();
@@ -969,22 +945,12 @@ async function getNote(
 
   if (!response.ok) {
     throw new Error(
-      "GET /note: HTTP " +
-      response.status +
-      (responseText
-        ? " – " + responseText
-        : "")
+      "Agent returned HTTP " +
+      response.status
     );
   }
 
-  try {
-    return JSON.parse(responseText);
-  } catch {
-    throw new Error(
-      "GET /note: Ungültige JSON-Antwort – " +
-      responseText
-    );
-  }
+  return JSON.parse(responseText);
 }
 
 
