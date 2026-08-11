@@ -4,12 +4,13 @@ module.exports = {
   development: {
     baseUrl: "https://localhost:3000/",
     proxyTarget: "http://10.211.55.7:48571",
+    agentUrl: "/api",
     enableLogging: false
   },
 
   production: {
-    baseUrl: "https://blondie-61.github.io/MailNotes/",
-    agentUrl: "http://127.0.0.1:48571",
+    baseUrl: "https://localhost:48571/",
+    agentUrl: "",
     enableLogging: false
   },
 

@@ -14,13 +14,13 @@
   <DisplayName DefaultValue="MailNotes"/>
   <Description DefaultValue="MailNotes für Outlook."/>
 
-  <IconUrl DefaultValue="https://blondie-61.github.io/MailNotes/assets/icon-64.png"/>
-  <HighResolutionIconUrl DefaultValue="https://blondie-61.github.io/MailNotes/assets/icon-128.png"/>
+  <IconUrl DefaultValue="https://localhost:48571/assets/icon-64.png"/>
+  <HighResolutionIconUrl DefaultValue="https://localhost:48571/assets/icon-128.png"/>
   <SupportUrl DefaultValue="https://blondie-61.github.io"/>
 
   <AppDomains>
-    <AppDomain>https://blondie-61.github.io</AppDomain>
-  </AppDomains>
+  <AppDomain>https://localhost:48571</AppDomain>
+</AppDomains>
 
   <Hosts>
     <Host Name="Mailbox"/>
@@ -35,7 +35,7 @@
   <FormSettings>
     <Form xsi:type="ItemRead">
       <DesktopSettings>
-        <SourceLocation DefaultValue="https://blondie-61.github.io/MailNotes/taskpane.html"/>
+        <SourceLocation DefaultValue="https://localhost:48571/taskpane.html"/>
         <RequestedHeight>250</RequestedHeight>
       </DesktopSettings>
     </Form>
@@ -110,25 +110,25 @@
       <bt:Images>
         <bt:Image
           id="Icon.16x16"
-          DefaultValue="https://blondie-61.github.io/MailNotes/assets/icon-16.png"/>
+          DefaultValue="https://localhost:48571/assets/icon-16.png"/>
 
         <bt:Image
           id="Icon.32x32"
-          DefaultValue="https://blondie-61.github.io/MailNotes/assets/icon-32.png"/>
+          DefaultValue="https://localhost:48571/assets/icon-32.png"/>
 
         <bt:Image
           id="Icon.80x80"
-          DefaultValue="https://blondie-61.github.io/MailNotes/assets/icon-80.png"/>
+          DefaultValue="https://localhost:48571/assets/icon-80.png"/>
       </bt:Images>
 
       <bt:Urls>
         <bt:Url
           id="Commands.Url"
-          DefaultValue="https://blondie-61.github.io/MailNotes/commands.html"/>
+          DefaultValue="https://localhost:48571/commands.html"/>
 
         <bt:Url
           id="Taskpane.Url"
-          DefaultValue="https://blondie-61.github.io/MailNotes/taskpane.html"/>
+          DefaultValue="https://localhost:48571/taskpane.html"/>
       </bt:Urls>
 
       <bt:ShortStrings>
@@ -208,25 +208,25 @@
         <bt:Images>
           <bt:Image
             id="Icon.16x16"
-            DefaultValue="https://blondie-61.github.io/MailNotes/assets/icon-16.png"/>
+            DefaultValue="https://localhost:48571/assets/icon-16.png"/>
 
           <bt:Image
             id="Icon.32x32"
-            DefaultValue="https://blondie-61.github.io/MailNotes/assets/icon-32.png"/>
+            DefaultValue="https://localhost:48571/assets/icon-32.png"/>
 
           <bt:Image
             id="Icon.80x80"
-            DefaultValue="https://blondie-61.github.io/MailNotes/assets/icon-80.png"/>
+            DefaultValue="https://localhost:48571/assets/icon-80.png"/>
         </bt:Images>
 
         <bt:Urls>
           <bt:Url
             id="Commands.Url"
-            DefaultValue="https://blondie-61.github.io/MailNotes/commands.html"/>
+            DefaultValue="https://localhost:48571/commands.html"/>
 
           <bt:Url
             id="Taskpane.Url"
-            DefaultValue="https://blondie-61.github.io/MailNotes/taskpane.html"/>
+            DefaultValue="https://localhost:48571/taskpane.html"/>
         </bt:Urls>
 
         <bt:ShortStrings>
