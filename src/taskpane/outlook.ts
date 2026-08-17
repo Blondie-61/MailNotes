@@ -2311,9 +2311,11 @@ async function refreshRepairQueueNotice(forceShow = false): Promise<number> {
       notice.hidden = repairHintDismissed;
     }
 
-    setText("repair-queue-notice-text", count === 1
-      ? "Ein Mail-Link ist derzeit nicht erreichbar. Outlook vor der Reparatur neu starten."
-      : count + " Mail-Links sind derzeit nicht erreichbar. Outlook vor der Reparatur neu starten.");
+    setText(
+      "repair-queue-notice-text",
+      "Durch Verschieben von Nachrichten in andere Ordner können Links zu Mails ungültig werden. " +
+      "Die betroffene Mail suchen und in einem separaten Fenster öffnen."
+    );
 
     return count;
   } catch {
@@ -2396,7 +2398,7 @@ async function showRepairQueue(): Promise<void> {
 
     const searchButton = document.createElement("button");
     searchButton.type = "button";
-    searchButton.textContent = "Mail für Reparatur auswählen";
+    searchButton.textContent = "Suchbegriff kopieren";
 
     const searchText = buildOutlookSearchText(item);
     if (!searchText) {
@@ -2404,24 +2406,25 @@ async function showRepairQueue(): Promise<void> {
       searchButton.title = "Für diese Mail sind weder Betreff, Absender noch Empfangsdatum gespeichert.";
       searchFeedback.textContent =
         "Für diese Mail konnte kein brauchbarer Outlook-Suchtext erzeugt werden. " +
-        "Bitte anhand der angezeigten Angaben manuell suchen.";
+        "Bitte anhand der angezeigten Angaben manuell suchen und die Mail anschließend in einem eigenen Fenster öffnen.";
       searchFeedback.hidden = false;
     } else {
       searchButton.onclick = async () => {
         if (!navigator.clipboard) {
           searchFeedback.textContent =
-            "Der Suchtext konnte nicht automatisch kopiert werden: „" + searchText + "“.";
+            "Der Suchtext konnte nicht automatisch kopiert werden: „" + searchText + "“. " +
+            "Bitte den Suchtext manuell in Outlook eingeben und die passende Mail in einem eigenen Fenster öffnen.";
           searchFeedback.hidden = false;
           return;
         }
 
         await navigator.clipboard.writeText(searchText);
 
-        searchButton.textContent = "Suchtext erneut kopieren";
+        searchButton.textContent = "Suchbegriff erneut kopieren";
         searchFeedback.textContent =
-          "Für die Outlook-Suche kopiert: „" + searchText + "“. " +
-          "Oben in Outlook einfügen und die passende Mail öffnen. " +
-          "MailNotes repariert den Link anschließend automatisch.";
+          "Für die Outlook-Suche in die Zwischenablage kopiert: „" + searchText + "“. " +
+          "Oben im Suchfeld in Outlook einfügen, die passende Mail suchen und anschließend in einem eigenen Fenster öffnen. " +
+          "MailNotes repariert den Link dann automatisch.";
         searchFeedback.hidden = false;
       };
     }
@@ -2456,11 +2459,11 @@ function buildOutlookSearchText(item: RepairQueueItem): string {
   const parts: string[] = [];
 
   if (subject) {
-    parts.push('subject:"' + subject + '"');
+    parts.push("subject:(" + subject + ")");
   }
 
   if (sender) {
-    parts.push('from:"' + sender + '"');
+    parts.push("from:(" + sender + ")");
   }
 
   // Sind Betreff oder Absender vorhanden, werden ausschließlich diese
