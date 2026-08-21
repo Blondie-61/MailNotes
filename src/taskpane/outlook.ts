@@ -12,6 +12,13 @@ let repairQueueCount = 0;
 let repairHintDismissed = false;
 let searchTimer: number | undefined;
 let searchSequence = 0;
+let favoritesFilterActive = false;
+let activeTags: TagInfo[] = [];
+let tagPanelOpen = false;
+let activePersons: PersonInfo[] = [];
+let personPanelOpen = false;
+let currentNoteExists = false;
+let currentNoteIsFavorite = false;
 
 const AUTOSAVE_DELAY_MS = 800;
 let autosaveTimer: number | undefined;
@@ -26,6 +33,39 @@ function log(...args: any[]) {
   if (ENABLE_LOGGING) {
     console.log(...args);
   }
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
+async function fetchAgentWithStartupRetry(
+  path: string,
+  attempts: number = 8,
+  delayMs: number = 500
+): Promise<Response> {
+  let lastError: unknown;
+
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    try {
+      const response = await fetch(AgentUrl + path);
+      if (response.ok) {
+        return response;
+      }
+
+      lastError = new Error("Agent returned HTTP " + response.status);
+    } catch (error) {
+      lastError = error;
+    }
+
+    if (attempt < attempts) {
+      await delay(delayMs);
+    }
+  }
+
+  throw lastError instanceof Error
+    ? lastError
+    : new Error("MailNotes Agent ist nicht erreichbar.");
 }
 
 function fileLog(event: string, data?: unknown): void {
@@ -249,6 +289,9 @@ function setShlStatus(
 }
 
 function clearCurrentMailDisplay() {
+  currentNoteExists = false;
+  currentNoteIsFavorite = false;
+  updateFavoriteButton();
   cancelPendingAutosave();
   currentMailNotesId = "";
 
@@ -305,9 +348,21 @@ function clearCurrentMailDisplay() {
   }
 
   clearBacklinks();
+  const noteTags = document.getElementById("note-tags");
+  if (noteTags) {
+    noteTags.innerHTML = "";
+    noteTags.hidden = true;
+  }
+  const notePersons = document.getElementById("note-persons");
+  if (notePersons) {
+    notePersons.innerHTML = "";
+    notePersons.hidden = true;
+  }
 }
 
 function setupButtons() {
+  setupInfoPanel();
+
   const noteContent =
     document.getElementById("note-content") as HTMLTextAreaElement;
 
@@ -325,6 +380,21 @@ function setupButtons() {
 
   const btnClearSearch =
     document.getElementById("btn-clear-search");
+
+  const btnFavorites =
+    document.getElementById("btn-favorites");
+
+  const btnTags =
+    document.getElementById("btn-tags");
+
+  const btnPersons =
+    document.getElementById("btn-persons");
+
+  const btnNoteFavorite =
+    document.getElementById("btn-note-favorite");
+
+  const searchCard =
+    document.querySelector(".search-card");
 
   if (noteContent) {
     noteContent.oninput = () => {
@@ -372,6 +442,601 @@ function setupButtons() {
   if (btnClearSearch) {
     btnClearSearch.onclick = clearSearch;
   }
+
+  if (btnFavorites) {
+    btnFavorites.onclick = () => {
+      void toggleFavoritesFilter();
+    };
+  }
+
+  if (btnTags) {
+    btnTags.onclick = () => {
+      void toggleTagPanel();
+    };
+  }
+
+  if (btnPersons) {
+    btnPersons.onclick = () => {
+      void togglePersonPanel();
+    };
+  }
+
+  if (btnNoteFavorite) {
+    btnNoteFavorite.onclick = () => {
+      void toggleCurrentNoteFavorite();
+    };
+  }
+
+  document.addEventListener("click", (event) => {
+    if (!searchCard) return;
+
+    const target = event.target as Node | null;
+    if (target && !searchCard.contains(target)) {
+      const hadFilter = favoritesFilterActive || activeTags.length > 0 || activePersons.length > 0;
+      setFavoritesFilterActive(false);
+      setActiveTags([]);
+      setActivePersons([]);
+      closeTagPanel();
+      closePersonPanel();
+      if (hadFilter) void refreshSearchForCurrentState();
+    }
+  });
+
+  void refreshStatisticsCounts();
+}
+
+function updateFavoriteButton(): void {
+  const button = document.getElementById("btn-note-favorite") as HTMLButtonElement | null;
+  if (!button) return;
+
+  button.disabled = !currentNoteExists;
+  button.textContent = currentNoteIsFavorite ? "♥" : "♡";
+  button.classList.toggle("active", currentNoteIsFavorite);
+  button.setAttribute("aria-pressed", currentNoteIsFavorite ? "true" : "false");
+  button.title = currentNoteIsFavorite ? "Favorit entfernen" : "Als Favorit markieren";
+  button.setAttribute("aria-label", button.title);
+}
+
+async function toggleCurrentNoteFavorite(): Promise<void> {
+  if (!currentNoteExists) return;
+  const identity = getCurrentMailSnapshot();
+  if (!identity) return;
+
+  const nextValue = !currentNoteIsFavorite;
+  const body = new URLSearchParams();
+  if (currentMailNotesId) body.append("mailNotesId", currentMailNotesId);
+  body.append("messageId", identity.messageId);
+  body.append("favorite", nextValue ? "true" : "false");
+
+  const button = document.getElementById("btn-note-favorite") as HTMLButtonElement | null;
+  if (button) button.disabled = true;
+
+  try {
+    const response = await fetch(AgentUrl + "/favorite", { method: "POST", body });
+    if (!response.ok) throw new Error("Agent returned HTTP " + response.status);
+
+    currentNoteIsFavorite = nextValue;
+    updateFavoriteButton();
+    await refreshStatisticsCounts();
+    if (favoritesFilterActive) await refreshSearchForCurrentState();
+  } catch (error) {
+    console.error("Favorit konnte nicht geändert werden:", error);
+    updateFavoriteButton();
+  }
+}
+
+async function refreshStatisticsCounts(): Promise<void> {
+  try {
+    const response = await fetchAgentWithStartupRetry("/stats");
+    const stats = await response.json() as MailNotesStats;
+    setInfoText("favorites-count", stats.favorites);
+    setInfoText("tags-count", stats.tags);
+    setInfoText("persons-count", stats.persons);
+  } catch {
+    // Komfortinformation: Fehler beeinflussen das Add-in nicht.
+  }
+}
+
+type TagInfo = {
+  name: string;
+  normalizedName: string;
+  count?: number;
+};
+
+function isTagActive(normalizedName: string): boolean {
+  return activeTags.some((tag) => tag.normalizedName === normalizedName);
+}
+
+function setActiveTags(tags: TagInfo[]): void {
+  activeTags = tags.filter(
+    (tag, index, items) =>
+      Boolean(tag.normalizedName) &&
+      items.findIndex((item) => item.normalizedName === tag.normalizedName) === index
+  );
+
+  const button = document.getElementById("btn-tags");
+  const label = document.getElementById("tags-filter-label");
+  const count = document.getElementById("tags-count");
+  const active = activeTags.length > 0;
+
+  button?.classList.toggle("active", active);
+  button?.setAttribute("aria-pressed", active ? "true" : "false");
+
+  if (activeTags.length === 1) {
+    const tag = activeTags[0];
+    button?.setAttribute("title", "Tagfilter: #" + tag.name);
+    if (label) label.textContent = "#" + tag.name;
+  } else if (activeTags.length > 1) {
+    button?.setAttribute(
+      "title",
+      "Tagfilter: " + activeTags.map((tag) => "#" + tag.name).join(" + ")
+    );
+    if (label) label.textContent = "#" + activeTags.length;
+  } else {
+    button?.setAttribute("title", "Tags auswählen");
+    if (label) label.textContent = "#";
+  }
+
+  if (count) count.hidden = active;
+}
+
+function toggleTagSelection(tag: TagInfo): void {
+  if (isTagActive(tag.normalizedName)) {
+    setActiveTags(activeTags.filter((item) => item.normalizedName !== tag.normalizedName));
+  } else {
+    setActiveTags([...activeTags, tag]);
+  }
+}
+
+function closeTagPanel(): void {
+  tagPanelOpen = false;
+  closePersonPanel();
+  const panel = document.getElementById("tag-filter-panel");
+  const button = document.getElementById("btn-tags");
+  if (panel) panel.hidden = true;
+  button?.setAttribute("aria-expanded", "false");
+}
+
+async function toggleTagPanel(): Promise<void> {
+  if (tagPanelOpen) {
+    closeTagPanel();
+    return;
+  }
+
+  closePersonPanel();
+  const panel = document.getElementById("tag-filter-panel");
+  const button = document.getElementById("btn-tags");
+  if (!panel) return;
+
+  tagPanelOpen = true;
+  panel.hidden = false;
+  panel.textContent = "Tags werden geladen …";
+  button?.setAttribute("aria-expanded", "true");
+
+  try {
+    const response = await fetch(AgentUrl + "/tags");
+    if (!response.ok) throw new Error("Agent returned HTTP " + response.status);
+    const result = await response.json();
+    const tags: TagInfo[] = Array.isArray(result.items) ? result.items : [];
+    setInfoText("tags-count", result.count ?? tags.length);
+    renderTagPanel(tags);
+  } catch (error) {
+    console.error("Tags konnten nicht geladen werden:", error);
+    panel.textContent = "Tags nicht verfügbar.";
+  }
+}
+
+function renderTagPanel(tags: TagInfo[]): void {
+  const panel = document.getElementById("tag-filter-panel");
+  if (!panel) return;
+  panel.innerHTML = "";
+
+  const allButton = document.createElement("button");
+  allButton.type = "button";
+  allButton.className = "tag-filter-item" + (activeTags.length === 0 ? " active" : "");
+  const allLabel = document.createElement("span");
+  allLabel.textContent = "Alle Tags";
+  allButton.appendChild(allLabel);
+  allButton.onclick = (event) => {
+    event.stopPropagation();
+    setActiveTags([]);
+    renderTagPanel(tags);
+    void refreshSearchForCurrentState();
+  };
+  panel.appendChild(allButton);
+
+  for (const tag of tags) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "tag-filter-item" +
+      (isTagActive(tag.normalizedName) ? " active" : "");
+
+    const name = document.createElement("span");
+    name.textContent = "#" + tag.name;
+    button.appendChild(name);
+
+    const count = document.createElement("span");
+    count.className = "tag-filter-item-count";
+    count.textContent = String(tag.count ?? 0);
+    button.appendChild(count);
+
+    button.onclick = (event) => {
+      event.stopPropagation();
+      toggleTagSelection(tag);
+      renderTagPanel(tags);
+      void refreshSearchForCurrentState();
+    };
+
+    panel.appendChild(button);
+  }
+}
+
+async function refreshCurrentNoteTags(): Promise<void> {
+  const container = document.getElementById("note-tags");
+  if (!container) return;
+
+  container.innerHTML = "";
+  container.hidden = true;
+
+  if (!currentNoteExists || !currentMailNotesId) return;
+
+  try {
+    const response = await fetch(
+      AgentUrl + "/note/tags?mailNotesId=" + encodeURIComponent(currentMailNotesId)
+    );
+    if (!response.ok) return;
+    const result = await response.json();
+    const tags: TagInfo[] = Array.isArray(result.items) ? result.items : [];
+    if (tags.length === 0) return;
+
+    const fragment = document.createDocumentFragment();
+    for (const tag of tags) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "note-tag";
+      button.textContent = "#" + tag.name;
+      button.title = "Nach #" + tag.name + " filtern";
+      button.onclick = (event) => {
+        event.stopPropagation();
+        toggleTagSelection(tag);
+        void refreshSearchForCurrentState();
+        document.querySelector(".search-card")?.scrollIntoView({ block: "nearest" });
+      };
+      fragment.appendChild(button);
+    }
+
+    container.appendChild(fragment);
+    container.hidden = false;
+  } catch {
+    // Tag-Anzeige ist Komfortfunktion.
+  }
+}
+
+type PersonInfo = {
+  name: string;
+  normalizedName: string;
+  count?: number;
+};
+
+function isPersonActive(normalizedName: string): boolean {
+  return activePersons.some((person) => person.normalizedName === normalizedName);
+}
+
+function setActivePersons(persons: PersonInfo[]): void {
+  activePersons = persons.filter(
+    (person, index, items) =>
+      Boolean(person.normalizedName) &&
+      items.findIndex((item) => item.normalizedName === person.normalizedName) === index
+  );
+
+  const button = document.getElementById("btn-persons");
+  const label = document.getElementById("persons-filter-label");
+  const count = document.getElementById("persons-count");
+  const active = activePersons.length > 0;
+
+  button?.classList.toggle("active", active);
+  button?.setAttribute("aria-pressed", active ? "true" : "false");
+
+  if (activePersons.length === 1) {
+    const person = activePersons[0];
+    button?.setAttribute("title", "Personenfilter: @" + person.name);
+    if (label) label.textContent = "@" + person.name;
+  } else if (activePersons.length > 1) {
+    button?.setAttribute(
+      "title",
+      "Personenfilter: " + activePersons.map((person) => "@" + person.name).join(" + ")
+    );
+    if (label) label.textContent = "@" + activePersons.length;
+  } else {
+    button?.setAttribute("title", "Personen auswählen");
+    if (label) label.textContent = "@";
+  }
+
+  if (count) count.hidden = active;
+}
+
+function togglePersonSelection(person: PersonInfo): void {
+  if (isPersonActive(person.normalizedName)) {
+    setActivePersons(activePersons.filter((item) => item.normalizedName !== person.normalizedName));
+  } else {
+    setActivePersons([...activePersons, person]);
+  }
+}
+
+function closePersonPanel(): void {
+  personPanelOpen = false;
+  const panel = document.getElementById("person-filter-panel");
+  const button = document.getElementById("btn-persons");
+  if (panel) panel.hidden = true;
+  button?.setAttribute("aria-expanded", "false");
+}
+
+async function togglePersonPanel(): Promise<void> {
+  if (personPanelOpen) {
+    closePersonPanel();
+    return;
+  }
+
+  closeTagPanel();
+  const panel = document.getElementById("person-filter-panel");
+  const button = document.getElementById("btn-persons");
+  if (!panel) return;
+
+  personPanelOpen = true;
+  panel.hidden = false;
+  panel.textContent = "Personen werden geladen …";
+  button?.setAttribute("aria-expanded", "true");
+
+  try {
+    const response = await fetchAgentWithStartupRetry("/persons");
+    if (!personPanelOpen) return;
+
+    const result = await response.json();
+    const persons: PersonInfo[] = Array.isArray(result.items) ? result.items : [];
+    setInfoText("persons-count", result.count ?? persons.length);
+    renderPersonPanel(persons);
+  } catch (error) {
+    console.error("Personen konnten nicht geladen werden:", error);
+    if (personPanelOpen) {
+      panel.textContent = "Personen nicht verfügbar.";
+    }
+  }
+}
+
+function renderPersonPanel(persons: PersonInfo[]): void {
+  const panel = document.getElementById("person-filter-panel");
+  if (!panel) return;
+  panel.innerHTML = "";
+
+  const allButton = document.createElement("button");
+  allButton.type = "button";
+  allButton.className = "person-filter-item" + (activePersons.length === 0 ? " active" : "");
+  const allLabel = document.createElement("span");
+  allLabel.textContent = "Alle Personen";
+  allButton.appendChild(allLabel);
+  allButton.onclick = (event) => {
+    event.stopPropagation();
+    setActivePersons([]);
+    renderPersonPanel(persons);
+    void refreshSearchForCurrentState();
+  };
+  panel.appendChild(allButton);
+
+  for (const person of persons) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "person-filter-item" +
+      (isPersonActive(person.normalizedName) ? " active" : "");
+
+    const name = document.createElement("span");
+    name.textContent = "@" + person.name;
+    button.appendChild(name);
+
+    const count = document.createElement("span");
+    count.className = "person-filter-item-count";
+    count.textContent = String(person.count ?? 0);
+    button.appendChild(count);
+
+    button.onclick = (event) => {
+      event.stopPropagation();
+      togglePersonSelection(person);
+      renderPersonPanel(persons);
+      void refreshSearchForCurrentState();
+    };
+
+    panel.appendChild(button);
+  }
+}
+
+async function refreshCurrentNotePersons(): Promise<void> {
+  const container = document.getElementById("note-persons");
+  if (!container) return;
+
+  container.innerHTML = "";
+  container.hidden = true;
+
+  if (!currentNoteExists || !currentMailNotesId) return;
+
+  try {
+    const response = await fetch(
+      AgentUrl + "/note/persons?mailNotesId=" + encodeURIComponent(currentMailNotesId)
+    );
+    if (!response.ok) return;
+    const result = await response.json();
+    const persons: PersonInfo[] = Array.isArray(result.items) ? result.items : [];
+    if (persons.length === 0) return;
+
+    const fragment = document.createDocumentFragment();
+    for (const person of persons) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "note-person";
+      button.textContent = "@" + person.name;
+      button.title = "Nach @" + person.name + " filtern";
+      button.onclick = (event) => {
+        event.stopPropagation();
+        togglePersonSelection(person);
+        void refreshSearchForCurrentState();
+        document.querySelector(".search-card")?.scrollIntoView({ block: "nearest" });
+      };
+      fragment.appendChild(button);
+    }
+
+    container.appendChild(fragment);
+    container.hidden = false;
+  } catch {
+    // Personen-Anzeige ist Komfortfunktion.
+  }
+}
+
+async function toggleFavoritesFilter(): Promise<void> {
+  // Favoriten ist wie Tags/Personen ein eigener Suchfilter.
+  // Eine eventuell geöffnete Auswahlliste gehört beim Wechsel hierher geschlossen.
+  closeTagPanel();
+  closePersonPanel();
+
+  setFavoritesFilterActive(!favoritesFilterActive);
+  await refreshSearchForCurrentState();
+
+  const input = document.getElementById("search-input") as HTMLInputElement | null;
+  input?.focus();
+}
+
+function setFavoritesFilterActive(active: boolean): void {
+  favoritesFilterActive = active;
+  const button = document.getElementById("btn-favorites");
+  button?.classList.toggle("active", favoritesFilterActive);
+  button?.setAttribute("aria-pressed", favoritesFilterActive ? "true" : "false");
+}
+
+async function refreshSearchForCurrentState(): Promise<void> {
+  if (searchTimer !== undefined) {
+    window.clearTimeout(searchTimer);
+    searchTimer = undefined;
+  }
+
+  const input = document.getElementById("search-input") as HTMLInputElement | null;
+  const searchText = input?.value.trim() ?? "";
+
+  if (searchText || favoritesFilterActive || activeTags.length > 0 || activePersons.length > 0) {
+    await searchNotes(
+      searchText,
+      favoritesFilterActive,
+      activeTags.map((tag) => tag.normalizedName),
+      activePersons.map((person) => person.normalizedName)
+    );
+  } else {
+    searchSequence++;
+    clearSearchResults();
+  }
+}
+
+async function loadFavorites(): Promise<void> {
+  const sequence = ++searchSequence;
+  setText("search-status", "Favoriten …");
+
+  try {
+    const response = await fetch(AgentUrl + "/favorites?limit=100");
+    if (!response.ok) throw new Error("Agent returned HTTP " + response.status);
+    const result = await response.json();
+    if (sequence !== searchSequence || !favoritesFilterActive) return;
+
+    const items: SearchResultItem[] = Array.isArray(result.items) ? result.items : [];
+    setInfoText("favorites-count", result.count ?? items.length);
+    renderSearchResults(items, "Favorit");
+  } catch (error) {
+    console.error("Favoriten konnten nicht geladen werden:", error);
+    if (sequence === searchSequence) {
+      clearSearchResults();
+      setText("search-status", "Favoriten nicht verfügbar.");
+    }
+  }
+}
+
+type MailNotesStats = {
+  notes: number;
+  mailLinks: number;
+  favorites: number;
+  tags: number;
+  persons: number;
+  version: string;
+};
+
+function setupInfoPanel(): void {
+  const button = document.getElementById("btn-info");
+  const card = document.getElementById("info-card");
+
+  if (!button || !card) {
+    return;
+  }
+
+  const closeInfoPanel = () => {
+    card.hidden = true;
+    button.setAttribute("aria-expanded", "false");
+    button.classList.remove("active");
+  };
+
+  button.onclick = () => {
+    const opening = card.hidden;
+
+    if (opening) {
+      card.hidden = false;
+      button.setAttribute("aria-expanded", "true");
+      button.classList.add("active");
+      void loadStatistics();
+    } else {
+      closeInfoPanel();
+    }
+  };
+
+  document.addEventListener("click", (event) => {
+    const target = event.target as Node | null;
+    if (!target || card.hidden) {
+      return;
+    }
+
+    if (!card.contains(target) && !button.contains(target)) {
+      closeInfoPanel();
+    }
+  });
+}
+
+async function loadStatistics(): Promise<void> {
+  setInfoText("info-status", "Wird aktualisiert …");
+
+  try {
+    const response = await fetch(AgentUrl + "/stats");
+
+    if (!response.ok) {
+      throw new Error("Agent returned HTTP " + response.status);
+    }
+
+    const stats = await response.json() as MailNotesStats;
+    setInfoText("info-notes", stats.notes);
+    setInfoText("info-mail-links", stats.mailLinks);
+    setInfoText("info-favorites", stats.favorites);
+    setInfoText("info-tags", stats.tags);
+    setInfoText("info-persons", stats.persons);
+    setInfoText("favorites-count", stats.favorites);
+    setInfoText("tags-count", stats.tags);
+    setInfoText("persons-count", stats.persons);
+    setInfoText("info-version", stats.version || "–");
+    setInfoText("info-status", "");
+  } catch (error) {
+    console.error("MailNotes-Statistik konnte nicht geladen werden:", error);
+    setInfoText("info-status", "Informationen nicht verfügbar.");
+  }
+}
+
+function setInfoText(id: string, value: unknown): void {
+  const element = document.getElementById(id);
+  if (!element) {
+    return;
+  }
+
+  element.textContent = value === null || value === undefined || value === ""
+    ? "–"
+    : String(value);
 }
 
 type SearchResultItem = {
@@ -392,14 +1057,17 @@ function scheduleSearch(searchText: string): void {
   }
 
   const trimmed = searchText.trim();
-  if (!trimmed) {
+  if (!trimmed && !favoritesFilterActive && activeTags.length === 0 && activePersons.length === 0) {
     clearSearchResults();
     return;
   }
 
-  setText("search-status", "Suche …");
+  setText(
+    "search-status",
+    favoritesFilterActive || activeTags.length > 0 || activePersons.length > 0 ? "Gefilterte Suche …" : "Suche …"
+  );
   searchTimer = window.setTimeout(() => {
-    void searchNotes(trimmed);
+    void searchNotes(trimmed, favoritesFilterActive, activeTags.map((tag) => tag.normalizedName), activePersons.map((person) => person.normalizedName));
   }, 250);
 }
 
@@ -415,6 +1083,11 @@ function clearSearch(): void {
     searchTimer = undefined;
   }
 
+  setFavoritesFilterActive(false);
+  setActiveTags([]);
+  setActivePersons([]);
+  closeTagPanel();
+  closePersonPanel();
   searchSequence++;
   clearSearchResults();
 }
@@ -428,12 +1101,20 @@ function clearSearchResults(): void {
   setText("search-status", "");
 }
 
-async function searchNotes(searchText: string): Promise<void> {
+async function searchNotes(
+  searchText: string,
+  favoriteOnly: boolean = false,
+  tagNormalizedNames: string[] = [],
+  personNormalizedNames: string[] = []
+): Promise<void> {
   const sequence = ++searchSequence;
 
   try {
     const response = await fetch(
-      AgentUrl + "/search?q=" + encodeURIComponent(searchText) + "&limit=50"
+      AgentUrl + "/search?q=" + encodeURIComponent(searchText) + "&limit=50" +
+      (favoriteOnly ? "&favorite=1" : "") +
+      (tagNormalizedNames.length > 0 ? "&tags=" + encodeURIComponent(tagNormalizedNames.join("|")) : "") +
+      (personNormalizedNames.length > 0 ? "&persons=" + encodeURIComponent(personNormalizedNames.join("|")) : "")
     );
 
     if (!response.ok) {
@@ -449,7 +1130,10 @@ async function searchNotes(searchText: string): Promise<void> {
       ? result.items
       : [];
 
-    renderSearchResults(items);
+    renderSearchResults(
+      items,
+      favoriteOnly && tagNormalizedNames.length === 0 && personNormalizedNames.length === 0 ? "Favorit" : "Treffer"
+    );
   } catch (error) {
     console.error("MailNotes-Suche fehlgeschlagen:", error);
     if (sequence === searchSequence) {
@@ -459,7 +1143,7 @@ async function searchNotes(searchText: string): Promise<void> {
   }
 }
 
-function renderSearchResults(items: SearchResultItem[]): void {
+function renderSearchResults(items: SearchResultItem[], singularLabel: string = "Treffer"): void {
   const results = document.getElementById("search-results");
   if (!results) {
     return;
@@ -469,13 +1153,15 @@ function renderSearchResults(items: SearchResultItem[]): void {
   results.hidden = false;
 
   if (items.length === 0) {
-    setText("search-status", "Keine Treffer.");
+    setText("search-status", singularLabel === "Favorit" ? "Keine Favoriten." : "Keine Treffer.");
     return;
   }
 
   setText(
     "search-status",
-    items.length === 1 ? "1 Treffer" : items.length + " Treffer"
+    items.length === 1
+      ? "1 " + singularLabel
+      : items.length + " " + (singularLabel === "Favorit" ? "Favoriten" : "Treffer")
   );
 
   const fragment = document.createDocumentFragment();
@@ -653,6 +1339,10 @@ async function loadNote(
       }
     }
 
+    currentNoteExists = Boolean(note.found);
+    currentNoteIsFavorite = Boolean(note.isFavorite);
+    updateFavoriteButton();
+
     if (note.found) {
       setEditorText(
         "note-content",
@@ -695,6 +1385,9 @@ async function loadNote(
       currentMailNotesId || messageId,
       expectedSequence
     );
+
+    await refreshCurrentNoteTags();
+    await refreshCurrentNotePersons();
 
   } catch (error) {
     if (expectedSequence !== itemChangeSequence) {
@@ -829,6 +1522,11 @@ async function drainAutosave(): Promise<boolean> {
           }
 
           updateNoteMetaAfterSave(result);
+          currentNoteExists = true;
+          updateFavoriteButton();
+          void refreshCurrentNoteTags();
+          void refreshCurrentNotePersons();
+          void refreshStatisticsCounts();
           setAutosaveStatus(
             autosaveCompletedRevision < autosaveRevision
               ? "Speichert …"

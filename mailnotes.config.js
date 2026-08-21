@@ -1,5 +1,5 @@
 module.exports = {
-  version: "1.0.0.2",
+  version: "1.0.0.3",
 
   development: {
     baseUrl: "https://localhost:3000/",

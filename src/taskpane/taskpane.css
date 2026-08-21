@@ -1,4 +1,4 @@
-:root {
+﻿:root {
     --mail-link-color: #0066cc;
 }
 
@@ -33,6 +33,42 @@ body {
 .app-logo {
     font-size: 42px;
     line-height: 1;
+}
+
+.app-title {
+    min-width: 0;
+}
+
+.info-button {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 auto;
+    width: 22px;
+    height: 22px;
+    margin-left: auto;
+    padding: 0;
+    border: 1px solid transparent;
+    border-radius: 50%;
+    background: transparent;
+    color: #8e8e93;
+    font-family: Georgia, serif;
+    font-size: 14px;
+    font-weight: 700;
+    line-height: 1;
+    cursor: pointer;
+}
+
+.info-button:hover,
+.info-button.active {
+    border-color: #d1d1d6;
+    background: rgba(255, 255, 255, 0.72);
+    color: #3a3a3c;
+}
+
+.info-button:focus-visible {
+    outline: none;
+    box-shadow: 0 0 0 3px rgba(0, 122, 255, 0.12);
 }
 
 h1 {
@@ -77,6 +113,55 @@ h1 {
 
     box-shadow:
         0 2px 8px rgba(0, 0, 0, 0.06);
+}
+
+.info-card {
+    margin-top: -12px;
+    padding-top: 13px;
+    padding-bottom: 13px;
+}
+
+.info-card[hidden] {
+    display: none;
+}
+
+.info-row {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 4px 0;
+    font-size: 13px;
+}
+
+.info-row span {
+    color: #6e6e73;
+}
+
+.info-row strong {
+    color: #1d1d1f;
+    font-weight: 600;
+}
+
+.info-separator {
+    height: 1px;
+    margin: 8px 0 5px;
+    background: #eeeeef;
+}
+
+.info-version-row {
+    font-size: 12px;
+}
+
+.info-status {
+    min-height: 0;
+    margin-top: 5px;
+    color: #9a6700;
+    font-size: 11px;
+}
+
+.info-status:empty {
+    display: none;
 }
 
 /* Mailinformationen */
@@ -539,6 +624,35 @@ button:disabled {
 }
 
 
+/* Favoriten */
+.note-title-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.note-favorite-button {
+    width: 24px;
+    height: 24px;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: #8e8e93;
+    font-size: 20px;
+    line-height: 1;
+    cursor: pointer;
+}
+
+.note-favorite-button:hover:not(:disabled),
+.note-favorite-button.active { color: #d83b5c; }
+.note-favorite-button:disabled { opacity: 0.28; cursor: default; }
+.note-favorite-button:focus-visible {
+    outline: none;
+    border-radius: 6px;
+    box-shadow: 0 0 0 3px rgba(0, 122, 255, 0.12);
+}
+
 /* Volltextsuche */
 .search-card {
     padding-bottom: 12px;
@@ -569,6 +683,196 @@ button:disabled {
 .search-input:focus {
     border-color: #8aa8ff;
     box-shadow: 0 0 0 3px rgba(0, 122, 255, 0.12);
+}
+
+.favorites-filter-button {
+    flex: 0 0 auto;
+    min-width: 54px;
+    padding: 0 9px;
+    border: 1px solid transparent;
+    border-radius: 10px;
+    font: inherit;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    background: #f2f2f4;
+    color: #6e6e73;
+}
+
+.favorites-filter-button:hover,
+.favorites-filter-button.active {
+    background: #fff0f3;
+    color: #c82f52;
+}
+.favorites-filter-button.active { border-color: #f1c5cf; }
+
+.tags-filter-button {
+    flex: 0 0 auto;
+    max-width: 110px;
+    padding: 0 9px;
+    border: 1px solid transparent;
+    border-radius: 10px;
+    font: inherit;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    background: #f2f2f4;
+    color: #6e6e73;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.tags-filter-button:hover,
+.tags-filter-button.active {
+    background: #eef5ff;
+    color: #315f9b;
+}
+
+.tags-filter-button.active {
+    border-color: #c6d8f0;
+}
+
+.tag-filter-panel {
+    margin-top: 8px;
+    padding: 6px;
+    max-height: 190px;
+    overflow-y: auto;
+    border: 1px solid #dedee3;
+    border-radius: 10px;
+    background: #fbfbfd;
+}
+
+.tag-filter-panel[hidden] { display: none; }
+
+.tag-filter-item {
+    width: 100%;
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 7px 8px;
+    border: 0;
+    border-radius: 7px;
+    background: transparent;
+    color: #1d1d1f;
+    font: inherit;
+    font-size: 13px;
+    text-align: left;
+    cursor: pointer;
+}
+
+.tag-filter-item:hover,
+.tag-filter-item.active { background: #eef5ff; }
+.tag-filter-item-count { color: #8e8e93; }
+
+.note-tags {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 5px;
+    margin-top: 8px;
+}
+
+.note-tags[hidden] { display: none; }
+
+.note-tag {
+    padding: 3px 7px;
+    border: 0;
+    border-radius: 999px;
+    background: #f2f2f4;
+    color: #55555a;
+    font: inherit;
+    font-size: 11px;
+    cursor: pointer;
+}
+
+.note-tag:hover {
+    background: #eef5ff;
+    color: #315f9b;
+}
+
+
+.persons-filter-button {
+    flex: 0 0 auto;
+    max-width: 130px;
+    padding: 0 9px;
+    border: 1px solid transparent;
+    border-radius: 10px;
+    font: inherit;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    background: #f2f2f4;
+    color: #6e6e73;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.persons-filter-button:hover,
+.persons-filter-button.active {
+    background: #f4f0fb;
+    color: #6b4b8f;
+}
+
+.persons-filter-button.active {
+    border-color: #d8c9e8;
+}
+
+.person-filter-panel {
+    margin-top: 8px;
+    padding: 6px;
+    max-height: 190px;
+    overflow-y: auto;
+    border: 1px solid #dedee3;
+    border-radius: 10px;
+    background: #fbfbfd;
+}
+
+.person-filter-panel[hidden] { display: none; }
+
+.person-filter-item {
+    width: 100%;
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 7px 8px;
+    border: 0;
+    border-radius: 7px;
+    background: transparent;
+    color: #1d1d1f;
+    font: inherit;
+    font-size: 13px;
+    text-align: left;
+    cursor: pointer;
+}
+
+.person-filter-item:hover,
+.person-filter-item.active { background: #f4f0fb; }
+.person-filter-item-count { color: #8e8e93; }
+
+.note-persons {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 5px;
+    margin-top: 5px;
+}
+
+.note-persons[hidden] { display: none; }
+
+.note-person {
+    padding: 3px 7px;
+    border: 0;
+    border-radius: 999px;
+    background: #f2f2f4;
+    color: #55555a;
+    font: inherit;
+    font-size: 11px;
+    cursor: pointer;
+}
+
+.note-person:hover {
+    background: #f4f0fb;
+    color: #6b4b8f;
 }
 
 .search-clear-button {

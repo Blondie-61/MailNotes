@@ -24,7 +24,7 @@
         <header class="app-header">
             <div class="app-logo">📒</div>
 
-            <div>
+            <div class="app-title">
                 <h1>MailNotes</h1>
                 <div class="subtitle">
                     Notizen zur aktuellen E-Mail
@@ -36,7 +36,28 @@
                     🟢 SHL aktiv
                 </div>
             </div>
+
+            <button
+                id="btn-info"
+                class="info-button"
+                type="button"
+                title="MailNotes-Informationen"
+                aria-label="MailNotes-Informationen anzeigen"
+                aria-expanded="false">
+                i
+            </button>
         </header>
+
+        <section id="info-card" class="card info-card" hidden>
+            <div class="info-row"><span>Notizen</span><strong id="info-notes">–</strong></div>
+            <div class="info-row"><span>Mail-Links</span><strong id="info-mail-links">–</strong></div>
+            <div class="info-row"><span>Favoriten</span><strong id="info-favorites">–</strong></div>
+            <div class="info-row"><span>Tags</span><strong id="info-tags">–</strong></div>
+            <div class="info-row"><span>Personen</span><strong id="info-persons">–</strong></div>
+            <div class="info-separator"></div>
+            <div class="info-row info-version-row"><span>Version</span><strong id="info-version">–</strong></div>
+            <div id="info-status" class="info-status" aria-live="polite"></div>
+        </section>
 
         <section class="card search-card">
             <div class="section-title search-title">MailNotes durchsuchen</div>
@@ -48,8 +69,13 @@
                     placeholder="Wörter aus Notiz, Betreff oder Absender"
                     autocomplete="off"
                     spellcheck="false" />
+                <button id="btn-favorites" class="favorites-filter-button" type="button" title="Favoriten anzeigen" aria-pressed="false">♥ <span id="favorites-count">0</span></button>
+                <button id="btn-tags" class="tags-filter-button" type="button" title="Tags auswählen" aria-pressed="false" aria-expanded="false"><span id="tags-filter-label">#</span> <span id="tags-count">0</span></button>
+                <button id="btn-persons" class="persons-filter-button" type="button" title="Personen auswählen" aria-pressed="false" aria-expanded="false"><span id="persons-filter-label">@</span> <span id="persons-count">0</span></button>
                 <button id="btn-clear-search" class="search-clear-button" type="button" title="Suche leeren">×</button>
             </div>
+            <div id="tag-filter-panel" class="tag-filter-panel" hidden></div>
+            <div id="person-filter-panel" class="person-filter-panel" hidden></div>
             <div id="search-status" class="search-status"></div>
             <div id="search-results" class="search-results" hidden></div>
         </section>
@@ -95,12 +121,18 @@
 
         <section class="card">
 
-            <div class="section-title">Notiz</div>
+            <div class="note-title-row">
+                <div class="section-title">Notiz</div>
+                <button id="btn-note-favorite" class="note-favorite-button" type="button" title="Als Favorit markieren" aria-label="Als Favorit markieren" aria-pressed="false" disabled>♡</button>
+            </div>
 
             <textarea
                 id="note-content"
                 class="note-editor"
                 placeholder="Für diese E-Mail existiert noch keine Notiz."></textarea>
+
+            <div id="note-tags" class="note-tags" hidden></div>
+            <div id="note-persons" class="note-persons" hidden></div>
 
             <div class="section-title links-title">
                 Links
