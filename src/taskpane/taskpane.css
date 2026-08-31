@@ -31,8 +31,16 @@ body {
 }
 
 .app-logo {
-    font-size: 42px;
-    line-height: 1;
+    flex: 0 0 auto;
+    width: 46px;
+    height: 46px;
+}
+
+.app-logo img {
+    display: block;
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
 }
 
 .app-title {

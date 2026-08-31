@@ -3,7 +3,7 @@ module.exports = {
 
   development: {
     baseUrl: "https://localhost:3000/",
-    proxyTarget: "http://10.211.55.7:48571",
+    proxyTarget: "http://127.0.0.1:48571",
     agentUrl: "/api",
     enableLogging: false
   },
