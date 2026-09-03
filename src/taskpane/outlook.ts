@@ -1,4 +1,4 @@
-﻿/* global Office, document, window, navigator */
+/* global Office, document, window, navigator */
 
 import { MailNotesConfig } from "../config";
 
@@ -19,6 +19,50 @@ let activePersons: PersonInfo[] = [];
 let personPanelOpen = false;
 let currentNoteExists = false;
 let currentNoteIsFavorite = false;
+
+
+const CATEGORY_SETTING_ENABLED = "mailnotes.category.enabled";
+const CATEGORY_SETTING_NAME = "mailnotes.category.name";
+const CATEGORY_SETTING_COLOR = "mailnotes.category.color";
+const DEFAULT_CATEGORY_NAME = "MailNotes";
+const DEFAULT_CATEGORY_COLOR = "Preset3"; // Gelb
+
+type MailNotesCategorySettings = {
+  enabled: boolean;
+  name: string;
+  color: string;
+};
+
+let mailNotesCategorySettings: MailNotesCategorySettings = {
+  enabled: false,
+  name: DEFAULT_CATEGORY_NAME,
+  color: DEFAULT_CATEGORY_COLOR
+};
+let categorySyncInProgress = false;
+let categorySyncPending = false;
+let categoryMasterCacheName = "";
+let categoryLastSyncedSequence = 0;
+let categoryLastSyncedHasNote: boolean | null = null;
+
+type NoteAutocompleteKind = "tag" | "person";
+type NoteAutocompleteItem = {
+  name: string;
+  normalizedName: string;
+  count?: number;
+};
+type NoteAutocompleteContext = {
+  kind: NoteAutocompleteKind;
+  start: number;
+  end: number;
+  query: string;
+};
+
+let noteAutocompleteKind: NoteAutocompleteKind | null = null;
+let noteAutocompleteItems: NoteAutocompleteItem[] = [];
+let noteAutocompleteSelectedIndex = 0;
+let noteAutocompleteTags: TagInfo[] | null = null;
+let noteAutocompletePersons: PersonInfo[] | null = null;
+let noteAutocompleteRequestSequence = 0;
 
 const AUTOSAVE_DELAY_MS = 800;
 let autosaveTimer: number | undefined;
@@ -360,8 +404,305 @@ function clearCurrentMailDisplay() {
   }
 }
 
+
+function categoryApiSupported(): boolean {
+  try {
+    return Boolean(
+      Office.context.requirements?.isSetSupported("Mailbox", "1.8") &&
+      Office.context.mailbox.masterCategories &&
+      (Office.context.mailbox.item as any)?.categories
+    );
+  } catch {
+    return false;
+  }
+}
+
+function readCategorySettings(): MailNotesCategorySettings {
+  const roaming = Office.context.roamingSettings;
+  const enabled = roaming.get(CATEGORY_SETTING_ENABLED);
+  const name = roaming.get(CATEGORY_SETTING_NAME);
+  const color = roaming.get(CATEGORY_SETTING_COLOR);
+
+  return {
+    enabled: enabled === true,
+    name: typeof name === "string" && name.trim() ? name.trim() : DEFAULT_CATEGORY_NAME,
+    color: typeof color === "string" && color ? color : DEFAULT_CATEGORY_COLOR
+  };
+}
+
+function saveRoamingSettings(): Promise<void> {
+  return new Promise((resolve, reject) => {
+    Office.context.roamingSettings.saveAsync((result) => {
+      if (result.status === Office.AsyncResultStatus.Succeeded) {
+        resolve();
+      } else {
+        reject(new Error(result.error?.message || "Einstellungen konnten nicht gespeichert werden."));
+      }
+    });
+  });
+}
+
+function setCategoryStatus(text: string): void {
+  setText("category-status", text);
+}
+
+function setupCategorySettings(): void {
+  mailNotesCategorySettings = readCategorySettings();
+
+  const enabled = document.getElementById("category-enabled") as HTMLInputElement | null;
+  const name = document.getElementById("category-name") as HTMLInputElement | null;
+  const color = document.getElementById("category-color") as HTMLSelectElement | null;
+
+  if (!enabled || !name || !color) {
+    return;
+  }
+
+  enabled.checked = mailNotesCategorySettings.enabled;
+  name.value = mailNotesCategorySettings.name;
+  color.value = mailNotesCategorySettings.color;
+
+  const supported = categoryApiSupported();
+  enabled.disabled = !supported;
+  name.disabled = !supported || !enabled.checked;
+  color.disabled = !supported || !enabled.checked;
+
+  if (!supported) {
+    setCategoryStatus("Outlook-Kategorien werden von dieser Umgebung nicht unterstützt.");
+    return;
+  }
+
+  const updateDependentControls = () => {
+    name.disabled = !enabled.checked;
+    color.disabled = !enabled.checked;
+  };
+
+  const persist = async (syncCurrentItem: boolean) => {
+    const oldName = mailNotesCategorySettings.name;
+    const newName = name.value.trim() || DEFAULT_CATEGORY_NAME;
+
+    name.value = newName;
+    mailNotesCategorySettings = {
+      enabled: enabled.checked,
+      name: newName,
+      color: color.value || DEFAULT_CATEGORY_COLOR
+    };
+
+    // Einstellungsänderungen erzwingen genau eine neue Synchronisation.
+    categoryLastSyncedHasNote = null;
+    if (oldName !== newName) {
+      categoryMasterCacheName = "";
+    }
+
+    Office.context.roamingSettings.set(CATEGORY_SETTING_ENABLED, mailNotesCategorySettings.enabled);
+    Office.context.roamingSettings.set(CATEGORY_SETTING_NAME, mailNotesCategorySettings.name);
+    Office.context.roamingSettings.set(CATEGORY_SETTING_COLOR, mailNotesCategorySettings.color);
+
+    setCategoryStatus("Speichert …");
+
+    try {
+      await saveRoamingSettings();
+      setCategoryStatus("");
+
+      if (mailNotesCategorySettings.enabled) {
+        // Kategorie beim Aktivieren/Ändern der Einstellung sofort sicherstellen.
+        // Dadurch erhalten wir auch unmittelbar eine aussagekräftige API-Fehlermeldung,
+        // falls Outlook das Anlegen der Master-Kategorie verweigert.
+        await ensureMasterCategoryExists(mailNotesCategorySettings);
+      }
+
+      if (syncCurrentItem) {
+        await synchronizeMailNotesCategoryForCurrentItem(oldName !== newName ? oldName : "");
+      }
+    } catch (error) {
+      setCategoryStatus(error instanceof Error ? error.message : String(error));
+    }
+  };
+
+  enabled.onchange = () => {
+    updateDependentControls();
+    void persist(true);
+  };
+
+  name.onchange = () => {
+    void persist(true);
+  };
+
+  name.onblur = () => {
+    if (name.value.trim() !== mailNotesCategorySettings.name) {
+      void persist(true);
+    }
+  };
+
+  color.onchange = () => {
+    void persist(true);
+  };
+}
+
+function noteHasMailNotesContent(content: string, links: string): boolean {
+  return Boolean(content.trim() || links.trim());
+}
+
+function getCurrentEditorHasMailNotesContent(): boolean {
+  return noteHasMailNotesContent(
+    getEditorText("note-content"),
+    getEditorText("note-links")
+  );
+}
+
+function officeAsyncToPromise<T>(
+  invoke: (callback: (result: Office.AsyncResult<T>) => void) => void
+): Promise<T> {
+  return new Promise((resolve, reject) => {
+    invoke((result) => {
+      if (result.status === Office.AsyncResultStatus.Succeeded) {
+        resolve(result.value);
+      } else {
+        reject(new Error(result.error?.message || "Outlook-Kategorie konnte nicht aktualisiert werden."));
+      }
+    });
+  });
+}
+
+async function ensureMasterCategoryExists(settings: MailNotesCategorySettings): Promise<void> {
+  // Die Master-Kategorienliste ist eine relativ teure Outlook-API-Abfrage.
+  // Innerhalb einer MailNotes-Sitzung müssen wir sie für denselben Namen nur
+  // einmal prüfen. Das verhindert Office.js-Aufrufe bei jedem Autosave.
+  if (categoryMasterCacheName === settings.name) {
+    return;
+  }
+
+  const masterCategories = Office.context.mailbox.masterCategories;
+  const categories = await officeAsyncToPromise<Office.CategoryDetails[]>((callback) =>
+    masterCategories.getAsync(callback)
+  );
+
+  const exists = (categories || []).some(
+    (category) => category.displayName.localeCompare(settings.name, undefined, { sensitivity: "accent" }) === 0
+  );
+
+  if (exists) {
+    categoryMasterCacheName = settings.name;
+    return;
+  }
+
+  const colorEnum = (Office.MailboxEnums.CategoryColor as any)[settings.color] ||
+    Office.MailboxEnums.CategoryColor.Preset3;
+
+  try {
+    await officeAsyncToPromise<void>((callback) =>
+      masterCategories.addAsync([
+        {
+          displayName: settings.name,
+          color: colorEnum
+        }
+      ], callback)
+    );
+  } catch (error) {
+    // Parallel geöffnete MailNotes-Fenster können dieselbe Kategorie gleichzeitig
+    // anlegen. In diesem Fall reicht es, die Masterliste erneut zu prüfen.
+    const after = await officeAsyncToPromise<Office.CategoryDetails[]>((callback) =>
+      masterCategories.getAsync(callback)
+    );
+    const nowExists = (after || []).some(
+      (category) => category.displayName.localeCompare(settings.name, undefined, { sensitivity: "accent" }) === 0
+    );
+    if (!nowExists) {
+      throw error;
+    }
+  }
+
+  categoryMasterCacheName = settings.name;
+}
+
+async function synchronizeMailNotesCategoryForCurrentItem(previousCategoryName: string = ""): Promise<void> {
+  if (!categoryApiSupported()) {
+    return;
+  }
+
+  if (categorySyncInProgress) {
+    categorySyncPending = true;
+    return;
+  }
+
+  categorySyncInProgress = true;
+
+  try {
+    do {
+      categorySyncPending = false;
+
+      const item = Office.context.mailbox.item as any;
+      const categories = item?.categories;
+      if (!categories) {
+        return;
+      }
+
+      const settings = mailNotesCategorySettings;
+      const hasNote = getCurrentEditorHasMailNotesContent();
+
+      // Für die laufende Mail interessiert nur der Zustandswechsel
+      // "keine Notiz" <-> "Notiz vorhanden". Normales Weiterschreiben in
+      // einer bereits vorhandenen Notiz darf keinerlei Outlook-Category-API
+      // mehr auslösen.
+      if (!previousCategoryName &&
+          categoryLastSyncedSequence === itemChangeSequence &&
+          categoryLastSyncedHasNote === hasNote) {
+        return;
+      }
+
+      // Ist die Option abgeschaltet, lassen wir vorhandene Kategorien bewusst
+      // unangetastet. MailNotes entfernt dann weder alte Zuordnungen noch die
+      // Master-Kategorie aus Outlook.
+      if (!settings.enabled) {
+        return;
+      }
+
+      if (hasNote) {
+        await ensureMasterCategoryExists(settings);
+      }
+
+      const itemCategories = await officeAsyncToPromise<Office.CategoryDetails[]>((callback) =>
+        categories.getAsync(callback)
+      );
+      const assigned = (itemCategories || []).map((category) => category.displayName);
+
+      if (previousCategoryName && previousCategoryName !== settings.name &&
+          assigned.some((value) => value === previousCategoryName)) {
+        await officeAsyncToPromise<void>((callback) =>
+          categories.removeAsync([previousCategoryName], callback)
+        );
+      }
+
+      const isAssigned = assigned.some((value) => value === settings.name);
+      const shouldBeAssigned = hasNote;
+
+      if (shouldBeAssigned && !isAssigned) {
+        await officeAsyncToPromise<void>((callback) =>
+          categories.addAsync([settings.name], callback)
+        );
+      } else if (!shouldBeAssigned && isAssigned) {
+        await officeAsyncToPromise<void>((callback) =>
+          categories.removeAsync([settings.name], callback)
+        );
+      }
+
+      categoryLastSyncedSequence = itemChangeSequence;
+      categoryLastSyncedHasNote = shouldBeAssigned;
+      previousCategoryName = "";
+    } while (categorySyncPending);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    log("Kategorie konnte nicht synchronisiert werden:", message);
+    fileLog("category sync error", { message });
+    setCategoryStatus("Kategorie: " + message);
+  } finally {
+    categorySyncInProgress = false;
+  }
+}
+
 function setupButtons() {
   setupInfoPanel();
+  setupDatabasePathButton();
+  setupCategorySettings();
 
   const noteContent =
     document.getElementById("note-content") as HTMLTextAreaElement;
@@ -399,9 +740,26 @@ function setupButtons() {
   if (noteContent) {
     noteContent.oninput = () => {
       scheduleAutosave();
+      void updateNoteAutocomplete(noteContent);
+    };
+
+    noteContent.onkeydown = (event) => {
+      handleNoteAutocompleteKeyDown(noteContent, event);
+    };
+
+    noteContent.onclick = () => {
+      void updateNoteAutocomplete(noteContent);
+    };
+
+    noteContent.onkeyup = (event) => {
+      if (event.key === "ArrowLeft" || event.key === "ArrowRight" ||
+          event.key === "Home" || event.key === "End") {
+        void updateNoteAutocomplete(noteContent);
+      }
     };
 
     noteContent.onblur = () => {
+      window.setTimeout(closeNoteAutocomplete, 120);
       void requestAutosave(true);
     };
   }
@@ -534,6 +892,324 @@ async function refreshStatisticsCounts(): Promise<void> {
     setInfoText("persons-count", stats.persons);
   } catch {
     // Komfortinformation: Fehler beeinflussen das Add-in nicht.
+  }
+}
+
+function closeNoteAutocomplete(): void {
+  noteAutocompleteKind = null;
+  noteAutocompleteItems = [];
+  noteAutocompleteSelectedIndex = 0;
+  noteAutocompleteRequestSequence++;
+
+  const panel = document.getElementById("note-autocomplete");
+  if (panel) {
+    panel.hidden = true;
+    panel.innerHTML = "";
+  }
+}
+
+function invalidateNoteAutocompleteCache(): void {
+  noteAutocompleteTags = null;
+  noteAutocompletePersons = null;
+}
+
+function getNoteAutocompleteContext(
+  editor: HTMLTextAreaElement
+): NoteAutocompleteContext | null {
+  const caret = editor.selectionStart ?? editor.value.length;
+  const textBeforeCaret = editor.value.substring(0, caret);
+  const lineStart = Math.max(
+    textBeforeCaret.lastIndexOf("\n"),
+    textBeforeCaret.lastIndexOf("\r")
+  ) + 1;
+  const line = textBeforeCaret.substring(lineStart);
+
+  const hashPos = line.lastIndexOf("#");
+  const atPos = line.lastIndexOf("@");
+  const markerPos = Math.max(hashPos, atPos);
+
+  if (markerPos < 0) return null;
+
+  const marker = line.charAt(markerPos);
+  const absoluteMarkerPos = lineStart + markerPos;
+
+  if (absoluteMarkerPos > 0) {
+    const previous = editor.value.charAt(absoluteMarkerPos - 1);
+    if (previous !== " " && previous !== "\t" && previous !== "\n" && previous !== "\r") {
+      return null;
+    }
+  }
+
+  const query = line.substring(markerPos + 1);
+
+  if (marker === "#") {
+    // Tags enthalten keine Leerzeichen. Sobald eines getippt wurde,
+    // ist der Tag abgeschlossen und Auto-Complete verschwindet.
+    if (/\s/.test(query) || query.indexOf("@") >= 0 || query.indexOf("#") >= 0) {
+      return null;
+    }
+
+    return {
+      kind: "tag",
+      start: absoluteMarkerPos,
+      end: caret,
+      query
+    };
+  }
+
+  // Personen dürfen Leerzeichen, Bindestriche, Apostrophe und Punkte
+  // enthalten. TAB beendet den Namen explizit und darf daher nicht
+  // innerhalb der aktuellen Query vorkommen.
+  if (query.indexOf("\t") >= 0 || query.indexOf("#") >= 0 || query.indexOf("@") >= 0) {
+    return null;
+  }
+
+  return {
+    kind: "person",
+    start: absoluteMarkerPos,
+    end: caret,
+    query
+  };
+}
+
+async function loadNoteAutocompleteItems(
+  kind: NoteAutocompleteKind
+): Promise<NoteAutocompleteItem[]> {
+  if (kind === "tag" && noteAutocompleteTags) {
+    return noteAutocompleteTags;
+  }
+
+  if (kind === "person" && noteAutocompletePersons) {
+    return noteAutocompletePersons;
+  }
+
+  const response = await fetchAgentWithStartupRetry(kind === "tag" ? "/tags" : "/persons");
+  const result = await response.json();
+  const items: NoteAutocompleteItem[] = Array.isArray(result.items) ? result.items : [];
+
+  if (kind === "tag") {
+    noteAutocompleteTags = items as TagInfo[];
+  } else {
+    noteAutocompletePersons = items as PersonInfo[];
+  }
+
+  return items;
+}
+
+function rankNoteAutocompleteItems(
+  items: NoteAutocompleteItem[],
+  query: string
+): NoteAutocompleteItem[] {
+  const normalizedQuery = query.trim().toLocaleLowerCase();
+
+  return items
+    .filter((item) => {
+      if (!normalizedQuery) return true;
+      return item.name.toLocaleLowerCase().includes(normalizedQuery);
+    })
+    .sort((a, b) => {
+      const aName = a.name.toLocaleLowerCase();
+      const bName = b.name.toLocaleLowerCase();
+      const aStarts = normalizedQuery && aName.startsWith(normalizedQuery) ? 0 : 1;
+      const bStarts = normalizedQuery && bName.startsWith(normalizedQuery) ? 0 : 1;
+      if (aStarts !== bStarts) return aStarts - bStarts;
+
+      const countDiff = (b.count ?? 0) - (a.count ?? 0);
+      if (countDiff !== 0) return countDiff;
+
+      return a.name.localeCompare(b.name, "de", { sensitivity: "base" });
+    })
+    .slice(0, 8);
+}
+
+async function updateNoteAutocomplete(editor: HTMLTextAreaElement): Promise<void> {
+  const context = getNoteAutocompleteContext(editor);
+  if (!context) {
+    closeNoteAutocomplete();
+    return;
+  }
+
+  const requestSequence = ++noteAutocompleteRequestSequence;
+
+  try {
+    const allItems = await loadNoteAutocompleteItems(context.kind);
+    if (requestSequence !== noteAutocompleteRequestSequence) return;
+
+    const currentContext = getNoteAutocompleteContext(editor);
+    if (!currentContext || currentContext.kind !== context.kind ||
+        currentContext.start !== context.start || currentContext.query !== context.query) {
+      return;
+    }
+
+    const items = rankNoteAutocompleteItems(allItems, context.query);
+    if (items.length === 0) {
+      closeNoteAutocomplete();
+      return;
+    }
+
+    noteAutocompleteKind = context.kind;
+    noteAutocompleteItems = items;
+    noteAutocompleteSelectedIndex = 0;
+    renderNoteAutocomplete(editor);
+  } catch (error) {
+    console.error("Auto-Complete konnte nicht geladen werden:", error);
+    closeNoteAutocomplete();
+  }
+}
+
+function renderNoteAutocomplete(editor: HTMLTextAreaElement): void {
+  const panel = document.getElementById("note-autocomplete");
+  if (!panel || !noteAutocompleteKind || noteAutocompleteItems.length === 0) {
+    closeNoteAutocomplete();
+    return;
+  }
+
+  panel.innerHTML = "";
+  panel.hidden = false;
+
+  noteAutocompleteItems.forEach((item, index) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "note-autocomplete-item" +
+      (index === noteAutocompleteSelectedIndex ? " active" : "");
+
+    const label = document.createElement("span");
+    label.textContent = (noteAutocompleteKind === "tag" ? "#" : "@") + item.name;
+    button.appendChild(label);
+
+    if ((item.count ?? 0) > 0) {
+      const count = document.createElement("span");
+      count.className = "note-autocomplete-count";
+      count.textContent = String(item.count);
+      button.appendChild(count);
+    }
+
+    button.onmousedown = (event) => {
+      // Fokus im Texteditor behalten, damit selectionStart/selectionEnd
+      // für das Ersetzen des Tokens erhalten bleiben.
+      event.preventDefault();
+    };
+
+    button.onclick = (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      applyNoteAutocompleteSelection(editor, index);
+    };
+
+    panel.appendChild(button);
+  });
+}
+
+function applyNoteAutocompleteSelection(
+  editor: HTMLTextAreaElement,
+  index: number
+): void {
+  const context = getNoteAutocompleteContext(editor);
+  const item = noteAutocompleteItems[index];
+
+  if (!context || !item || context.kind !== noteAutocompleteKind) {
+    closeNoteAutocomplete();
+    return;
+  }
+
+  const marker = context.kind === "tag" ? "#" : "@";
+  const terminator = context.kind === "person" ? "\t" : " ";
+  const replacement = marker + item.name + terminator;
+
+  editor.value =
+    editor.value.substring(0, context.start) +
+    replacement +
+    editor.value.substring(context.end);
+
+  const newCaret = context.start + replacement.length;
+  editor.focus();
+  editor.setSelectionRange(newCaret, newCaret);
+
+  closeNoteAutocomplete();
+  scheduleAutosave();
+}
+
+function insertPersonTerminator(editor: HTMLTextAreaElement): boolean {
+  const context = getNoteAutocompleteContext(editor);
+  if (!context || context.kind !== "person" || context.query.trim().length < 2) {
+    return false;
+  }
+
+  editor.value =
+    editor.value.substring(0, context.end) +
+    "\t" +
+    editor.value.substring(context.end);
+
+  const newCaret = context.end + 1;
+  editor.setSelectionRange(newCaret, newCaret);
+  closeNoteAutocomplete();
+  scheduleAutosave();
+  return true;
+}
+
+function insertTagTerminator(editor: HTMLTextAreaElement): boolean {
+  const context = getNoteAutocompleteContext(editor);
+  if (!context || context.kind !== "tag" || context.query.trim().length < 1) {
+    return false;
+  }
+
+  editor.value =
+    editor.value.substring(0, context.end) +
+    " " +
+    editor.value.substring(context.end);
+
+  const newCaret = context.end + 1;
+  editor.setSelectionRange(newCaret, newCaret);
+  closeNoteAutocomplete();
+  scheduleAutosave();
+  return true;
+}
+
+function handleNoteAutocompleteKeyDown(
+  editor: HTMLTextAreaElement,
+  event: KeyboardEvent
+): void {
+  const panel = document.getElementById("note-autocomplete");
+  const autocompleteVisible = Boolean(panel && !panel.hidden && noteAutocompleteItems.length > 0);
+
+  if (autocompleteVisible) {
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      noteAutocompleteSelectedIndex =
+        (noteAutocompleteSelectedIndex + 1) % noteAutocompleteItems.length;
+      renderNoteAutocomplete(editor);
+      return;
+    }
+
+    if (event.key === "ArrowUp") {
+      event.preventDefault();
+      noteAutocompleteSelectedIndex =
+        (noteAutocompleteSelectedIndex - 1 + noteAutocompleteItems.length) %
+        noteAutocompleteItems.length;
+      renderNoteAutocomplete(editor);
+      return;
+    }
+
+    if (event.key === "Enter" || event.key === "Tab") {
+      event.preventDefault();
+      applyNoteAutocompleteSelection(editor, noteAutocompleteSelectedIndex);
+      return;
+    }
+
+    if (event.key === "Escape") {
+      event.preventDefault();
+      closeNoteAutocomplete();
+      return;
+    }
+  }
+
+  // Auch ohne ausgewählten Vorschlag schließt TAB das aktuelle Token ab:
+  // @Person mit echtem TAB als eindeutigem Trenner,
+  // #Tag mit einem normalen Leerzeichen.
+  if (event.key === "Tab") {
+    if (insertPersonTerminator(editor) || insertTagTerminator(editor)) {
+      event.preventDefault();
+    }
   }
 }
 
@@ -675,25 +1351,48 @@ async function refreshCurrentNoteTags(): Promise<void> {
   const container = document.getElementById("note-tags");
   if (!container) return;
 
-  container.innerHTML = "";
-  container.hidden = true;
-
-  if (!currentNoteExists || !currentMailNotesId) return;
+  if (!currentNoteExists || !currentMailNotesId) {
+    if (container.childElementCount > 0 || !container.hidden) {
+      container.innerHTML = "";
+      container.hidden = true;
+    }
+    return;
+  }
 
   try {
     const response = await fetch(
       AgentUrl + "/note/tags?mailNotesId=" + encodeURIComponent(currentMailNotesId)
     );
     if (!response.ok) return;
+
     const result = await response.json();
     const tags: TagInfo[] = Array.isArray(result.items) ? result.items : [];
-    if (tags.length === 0) return;
+
+    // Die Anzeige nur neu aufbauen, wenn sich die Tag-Liste wirklich geändert hat.
+    // So bleibt die Höhe unter dem Editor beim Autosave stabil und es ruckelt nicht.
+    const newSignature = tags.map((tag) => tag.normalizedName || tag.name).join("\u0001");
+    const currentSignature = Array.from(
+      container.querySelectorAll<HTMLButtonElement>(".note-tag")
+    )
+      .map((button) => (button.dataset.normalizedName || button.textContent || "").replace(/^#/, ""))
+      .join("\u0001");
+
+    if (newSignature === currentSignature) {
+      return;
+    }
+
+    if (tags.length === 0) {
+      container.innerHTML = "";
+      container.hidden = true;
+      return;
+    }
 
     const fragment = document.createDocumentFragment();
     for (const tag of tags) {
       const button = document.createElement("button");
       button.type = "button";
       button.className = "note-tag";
+      button.dataset.normalizedName = tag.normalizedName || tag.name;
       button.textContent = "#" + tag.name;
       button.title = "Nach #" + tag.name + " filtern";
       button.onclick = (event) => {
@@ -705,7 +1404,7 @@ async function refreshCurrentNoteTags(): Promise<void> {
       fragment.appendChild(button);
     }
 
-    container.appendChild(fragment);
+    container.replaceChildren(fragment);
     container.hidden = false;
   } catch {
     // Tag-Anzeige ist Komfortfunktion.
@@ -852,25 +1551,46 @@ async function refreshCurrentNotePersons(): Promise<void> {
   const container = document.getElementById("note-persons");
   if (!container) return;
 
-  container.innerHTML = "";
-  container.hidden = true;
-
-  if (!currentNoteExists || !currentMailNotesId) return;
+  if (!currentNoteExists || !currentMailNotesId) {
+    if (container.childElementCount > 0 || !container.hidden) {
+      container.innerHTML = "";
+      container.hidden = true;
+    }
+    return;
+  }
 
   try {
     const response = await fetch(
       AgentUrl + "/note/persons?mailNotesId=" + encodeURIComponent(currentMailNotesId)
     );
     if (!response.ok) return;
+
     const result = await response.json();
     const persons: PersonInfo[] = Array.isArray(result.items) ? result.items : [];
-    if (persons.length === 0) return;
+
+    const newSignature = persons.map((person) => person.normalizedName || person.name).join("\u0001");
+    const currentSignature = Array.from(
+      container.querySelectorAll<HTMLButtonElement>(".note-person")
+    )
+      .map((button) => (button.dataset.normalizedName || button.textContent || "").replace(/^@/, ""))
+      .join("\u0001");
+
+    if (newSignature === currentSignature) {
+      return;
+    }
+
+    if (persons.length === 0) {
+      container.innerHTML = "";
+      container.hidden = true;
+      return;
+    }
 
     const fragment = document.createDocumentFragment();
     for (const person of persons) {
       const button = document.createElement("button");
       button.type = "button";
       button.className = "note-person";
+      button.dataset.normalizedName = person.normalizedName || person.name;
       button.textContent = "@" + person.name;
       button.title = "Nach @" + person.name + " filtern";
       button.onclick = (event) => {
@@ -882,7 +1602,7 @@ async function refreshCurrentNotePersons(): Promise<void> {
       fragment.appendChild(button);
     }
 
-    container.appendChild(fragment);
+    container.replaceChildren(fragment);
     container.hidden = false;
   } catch {
     // Personen-Anzeige ist Komfortfunktion.
@@ -962,6 +1682,64 @@ type MailNotesStats = {
   version: string;
 };
 
+
+async function loadDatabasePath(): Promise<string> {
+  const response = await fetch(AgentUrl + "/version");
+  if (!response.ok) throw new Error("Agent returned HTTP " + response.status);
+  const info = await response.json();
+  const path = (info.databasePath || "").toString();
+  setInfoText("info-database-path", path || "–");
+  return path;
+}
+
+function setupDatabasePathButton(): void {
+  const button = document.getElementById("btn-database-path") as HTMLButtonElement | null;
+  if (!button) return;
+
+  button.onclick = async () => {
+    try {
+      const currentPath = await loadDatabasePath();
+      const requestedPath = window.prompt(
+        "Neuer Datenbankpfad oder Zielordner:\n\n" +
+        "Existiert dort bereits eine MailNotes.sqlite, wird diese übernommen. " +
+        "Andernfalls wird die aktuelle Datenbank dorthin kopiert.",
+        currentPath
+      );
+
+      if (requestedPath === null || requestedPath.trim() === "") return;
+
+      button.disabled = true;
+      setInfoText("info-status", "Datenbank wird umgestellt …");
+
+      const body = new URLSearchParams();
+      body.append("path", requestedPath.trim());
+      const response = await fetch(AgentUrl + "/database/path", { method: "POST", body });
+      const result = await response.json();
+
+      if (!response.ok || !result.ok) {
+        throw new Error(result.message || "Datenbankpfad konnte nicht geändert werden.");
+      }
+
+      setInfoText("info-database-path", result.databasePath || requestedPath.trim());
+      if (result.mode === "adopted") {
+        setInfoText("info-status", "Vorhandene Datenbank übernommen.");
+      } else if (result.mode === "moved") {
+        setInfoText("info-status", "Datenbank verschoben.");
+      } else {
+        setInfoText("info-status", "Datenbankpfad unverändert.");
+      }
+
+      await loadNote(itemChangeSequence);
+      void refreshStatisticsCounts();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setInfoText("info-status", message);
+    } finally {
+      button.disabled = false;
+    }
+  };
+}
+
 function setupInfoPanel(): void {
   const button = document.getElementById("btn-info");
   const card = document.getElementById("info-card");
@@ -984,6 +1762,7 @@ function setupInfoPanel(): void {
       button.setAttribute("aria-expanded", "true");
       button.classList.add("active");
       void loadStatistics();
+      void loadDatabasePath();
     } else {
       closeInfoPanel();
     }
@@ -1388,6 +2167,7 @@ async function loadNote(
 
     await refreshCurrentNoteTags();
     await refreshCurrentNotePersons();
+    void synchronizeMailNotesCategoryForCurrentItem();
 
   } catch (error) {
     if (expectedSequence !== itemChangeSequence) {
@@ -1523,10 +2303,12 @@ async function drainAutosave(): Promise<boolean> {
 
           updateNoteMetaAfterSave(result);
           currentNoteExists = true;
+          invalidateNoteAutocompleteCache();
           updateFavoriteButton();
           void refreshCurrentNoteTags();
           void refreshCurrentNotePersons();
           void refreshStatisticsCounts();
+          void synchronizeMailNotesCategoryForCurrentItem();
           setAutosaveStatus(
             autosaveCompletedRevision < autosaveRevision
               ? "Speichert …"

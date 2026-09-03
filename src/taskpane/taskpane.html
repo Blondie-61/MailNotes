@@ -58,6 +58,38 @@
             <div class="info-row"><span>Personen</span><strong id="info-persons">–</strong></div>
             <div class="info-separator"></div>
             <div class="info-row info-version-row"><span>Version</span><strong id="info-version">–</strong></div>
+      <div class="info-separator"></div>
+      <div class="info-database-row">
+        <div class="info-database-label">Datenbank</div>
+        <div id="info-database-path" class="info-database-path">–</div>
+        <button id="btn-database-path" class="info-database-button" type="button">Pfad ändern …</button>
+      </div>
+      <div class="info-separator"></div>
+      <div class="info-category-settings">
+        <label class="info-category-enabled">
+          <input id="category-enabled" type="checkbox" />
+          <span>Bei Notiz Outlook-Kategorie setzen</span>
+        </label>
+        <div class="info-category-field">
+          <label for="category-name">Name</label>
+          <input id="category-name" type="text" maxlength="64" value="MailNotes" />
+        </div>
+        <div class="info-category-field">
+          <label for="category-color">Farbe</label>
+          <select id="category-color">
+            <option value="Preset3">Gelb</option>
+            <option value="Preset1">Orange</option>
+            <option value="Preset0">Rot</option>
+            <option value="Preset4">Grün</option>
+            <option value="Preset5">Türkis</option>
+            <option value="Preset7">Blau</option>
+            <option value="Preset8">Lila</option>
+            <option value="Preset12">Grau</option>
+          </select>
+        </div>
+        <div class="info-category-help">Die Farbe wird beim erstmaligen Anlegen der Kategorie verwendet. Eine bereits vorhandene Outlook-Kategorie wird nicht verändert.</div>
+        <div id="category-status" class="info-category-status" aria-live="polite"></div>
+      </div>
             <div id="info-status" class="info-status" aria-live="polite"></div>
         </section>
 
@@ -128,10 +160,14 @@
                 <button id="btn-note-favorite" class="note-favorite-button" type="button" title="Als Favorit markieren" aria-label="Als Favorit markieren" aria-pressed="false" disabled>♡</button>
             </div>
 
-            <textarea
-                id="note-content"
-                class="note-editor"
-                placeholder="Für diese E-Mail existiert noch keine Notiz."></textarea>
+            <div class="note-editor-wrap">
+                <textarea
+                    id="note-content"
+                    class="note-editor"
+                    placeholder="Für diese E-Mail existiert noch keine Notiz."></textarea>
+
+                <div id="note-autocomplete" class="note-autocomplete" hidden></div>
+            </div>
 
             <div id="note-tags" class="note-tags" hidden></div>
             <div id="note-persons" class="note-persons" hidden></div>

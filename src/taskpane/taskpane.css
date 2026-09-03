@@ -1,4 +1,4 @@
-﻿:root {
+:root {
     --mail-link-color: #0066cc;
 }
 
@@ -216,6 +216,8 @@ h1 {
     font-family: inherit;
     font-size: 14px;
     line-height: 1.4;
+    tab-size: 1;
+    -moz-tab-size: 1;
 
     color: #1d1d1f;
     background: #fbfbfd;
@@ -231,6 +233,61 @@ h1 {
 
     box-shadow:
         0 0 0 3px rgba(0, 122, 255, 0.12);
+}
+
+/* Auto-Complete für #Tags und @Personen */
+
+.note-editor-wrap {
+    position: relative;
+}
+
+.note-autocomplete {
+    position: absolute;
+    z-index: 20;
+    left: 0;
+    right: 0;
+    top: calc(100% + 6px);
+
+    padding: 5px;
+    max-height: 190px;
+    overflow-y: auto;
+
+    border: 1px solid #dedee3;
+    border-radius: 9px;
+    background: #ffffff;
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.12);
+}
+
+.note-autocomplete[hidden] {
+    display: none;
+}
+
+.note-autocomplete-item {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 7px 9px;
+    border: 0;
+    border-radius: 7px;
+    background: transparent;
+    color: #1d1d1f;
+    font: inherit;
+    font-size: 13px;
+    text-align: left;
+    cursor: pointer;
+}
+
+.note-autocomplete-item:hover,
+.note-autocomplete-item.active {
+    background: #eef5ff;
+}
+
+.note-autocomplete-count {
+    flex: 0 0 auto;
+    color: #8e8e93;
+    font-size: 11px;
 }
 
 /* Link-Eingabe */
@@ -943,4 +1000,88 @@ button:disabled {
 
 .search-result-snippet {
     color: #3a3a3c;
+}
+
+
+.info-database-row {
+  margin-top: 8px;
+}
+.info-database-label {
+  font-size: 12px;
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+.info-database-path {
+  font-size: 11px;
+  line-height: 1.35;
+  word-break: break-all;
+  color: #666;
+  margin-bottom: 6px;
+}
+.info-database-button {
+  font-size: 12px;
+  padding: 5px 9px;
+}
+
+
+.info-category-settings {
+  display: grid;
+  gap: 8px;
+}
+
+.info-category-enabled {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.info-category-enabled input {
+  margin: 0;
+}
+
+.info-category-field {
+  display: grid;
+  grid-template-columns: 58px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+}
+
+.info-category-field label {
+  font-size: 11px;
+  color: #666;
+}
+
+.info-category-field input,
+.info-category-field select {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  height: 28px;
+  padding: 3px 7px;
+  border: 1px solid #c8c8c8;
+  border-radius: 4px;
+  background: #fff;
+  font: inherit;
+  font-size: 12px;
+}
+
+.info-category-field input:disabled,
+.info-category-field select:disabled {
+  opacity: 0.55;
+}
+
+.info-category-help {
+  font-size: 10px;
+  line-height: 1.35;
+  color: #777;
+}
+
+.info-category-status {
+  min-height: 14px;
+  font-size: 10px;
+  line-height: 1.35;
+  color: #666;
 }

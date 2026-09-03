@@ -14,12 +14,12 @@
   <DisplayName DefaultValue="MailNotes"/>
   <Description DefaultValue="MailNotes für Outlook."/>
 
-  <IconUrl DefaultValue="https://localhost:3000/assets/icon-64.png"/>
-  <HighResolutionIconUrl DefaultValue="https://localhost:3000/assets/icon-128.png"/>
-  <SupportUrl DefaultValue="https://localhost:3000"/>
+  <IconUrl DefaultValue="https://localhost:48571/assets/icon-64.png"/>
+  <HighResolutionIconUrl DefaultValue="https://localhost:48571/assets/icon-128.png"/>
+  <SupportUrl DefaultValue="https://localhost:48571"/>
 
   <AppDomains>
-    <AppDomain>https://localhost:3000</AppDomain>
+    <AppDomain>https://localhost:48571</AppDomain>
   </AppDomains>
 
   <Hosts>
@@ -35,13 +35,13 @@
   <FormSettings>
     <Form xsi:type="ItemRead">
       <DesktopSettings>
-        <SourceLocation DefaultValue="https://localhost:3000/taskpane.html"/>
+        <SourceLocation DefaultValue="https://localhost:48571/taskpane.html"/>
         <RequestedHeight>250</RequestedHeight>
       </DesktopSettings>
     </Form>
   </FormSettings>
 
-  <Permissions>ReadWriteItem</Permissions>
+  <Permissions>ReadWriteMailbox</Permissions>
 
   <Rule xsi:type="RuleCollection" Mode="Or">
     <Rule
@@ -110,25 +110,25 @@
       <bt:Images>
         <bt:Image
           id="Icon.16x16"
-          DefaultValue="https://localhost:3000/assets/icon-16.png"/>
+          DefaultValue="https://localhost:48571/assets/icon-16.png"/>
 
         <bt:Image
           id="Icon.32x32"
-          DefaultValue="https://localhost:3000/assets/icon-32.png"/>
+          DefaultValue="https://localhost:48571/assets/icon-32.png"/>
 
         <bt:Image
           id="Icon.80x80"
-          DefaultValue="https://localhost:3000/assets/icon-80.png"/>
+          DefaultValue="https://localhost:48571/assets/icon-80.png"/>
       </bt:Images>
 
       <bt:Urls>
         <bt:Url
           id="Commands.Url"
-          DefaultValue="https://localhost:3000/commands.html"/>
+          DefaultValue="https://localhost:48571/commands.html"/>
 
         <bt:Url
           id="Taskpane.Url"
-          DefaultValue="https://localhost:3000/taskpane.html"/>
+          DefaultValue="https://localhost:48571/taskpane.html"/>
       </bt:Urls>
 
       <bt:ShortStrings>
@@ -208,25 +208,25 @@
         <bt:Images>
           <bt:Image
             id="Icon.16x16"
-            DefaultValue="https://localhost:3000/assets/icon-16.png"/>
+            DefaultValue="https://localhost:48571/assets/icon-16.png"/>
 
           <bt:Image
             id="Icon.32x32"
-            DefaultValue="https://localhost:3000/assets/icon-32.png"/>
+            DefaultValue="https://localhost:48571/assets/icon-32.png"/>
 
           <bt:Image
             id="Icon.80x80"
-            DefaultValue="https://localhost:3000/assets/icon-80.png"/>
+            DefaultValue="https://localhost:48571/assets/icon-80.png"/>
         </bt:Images>
 
         <bt:Urls>
           <bt:Url
             id="Commands.Url"
-            DefaultValue="https://localhost:3000/commands.html"/>
+            DefaultValue="https://localhost:48571/commands.html"/>
 
           <bt:Url
             id="Taskpane.Url"
-            DefaultValue="https://localhost:3000/taskpane.html"/>
+            DefaultValue="https://localhost:48571/taskpane.html"/>
         </bt:Urls>
 
         <bt:ShortStrings>
