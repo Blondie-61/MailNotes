@@ -333,6 +333,7 @@ function setShlStatus(
 }
 
 function clearCurrentMailDisplay() {
+  autosaveSuppressed = true;
   currentNoteExists = false;
   currentNoteIsFavorite = false;
   updateFavoriteButton();
@@ -2033,6 +2034,8 @@ function showMailInformation() {
 async function loadNote(
   expectedSequence: number = itemChangeSequence
 ) {
+  autosaveSuppressed = true;
+
   const item =
     Office.context.mailbox.item;
 
@@ -2152,6 +2155,7 @@ async function loadNote(
     }
 
     autosaveCompletedRevision = autosaveRevision;
+    autosaveSuppressed = false;
     setAutosaveStatus("");
 
     await renderLinks(expectedSequence);
@@ -2190,6 +2194,7 @@ async function loadNote(
     );
 
     setNoteMeta("", "");
+    setAutosaveStatus("Laden fehlgeschlagen");
 
     await renderLinks(expectedSequence);
     clearBacklinks();
@@ -2243,7 +2248,11 @@ function scheduleAutosave(): void {
 }
 
 async function requestAutosave(immediate: boolean): Promise<boolean> {
-  if (autosaveSuppressed || autosaveRevision <= autosaveCompletedRevision) {
+  if (autosaveSuppressed) {
+    return false;
+  }
+
+  if (autosaveRevision <= autosaveCompletedRevision) {
     return true;
   }
 
