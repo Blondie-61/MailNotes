@@ -1,5 +1,8 @@
 /* global Office, document, window, navigator */
 
+declare const __MAILNOTES_BUILD_TIME__: string;
+declare const __MAILNOTES_BUILD_COMMIT__: string;
+
 import { MailNotesConfig } from "../config";
 
 const AgentUrl = MailNotesConfig.agentUrl;
@@ -10,6 +13,11 @@ let currentMailNotesId = "";
 let shlStatusResetTimer: number | undefined;
 let repairQueueCount = 0;
 let repairHintDismissed = false;
+let repairWatchTimer: number | undefined;
+let repairWatchDeadline = 0;
+let repairWatchItemIds = new Set<number>();
+const REPAIR_WATCH_INTERVAL_MS = 1500;
+const REPAIR_WATCH_TIMEOUT_MS = 2 * 60 * 1000;
 let searchTimer: number | undefined;
 let searchSequence = 0;
 let favoritesFilterActive = false;
@@ -166,13 +174,13 @@ Office.onReady((info) => {
 
 async function runOutlook() {
   setupButtons();
-  void refreshRepairQueueNotice(true);
 
   const sequence = ++itemChangeSequence;
 
   clearCurrentMailDisplay();
   showMailInformation();
   await loadNote(sequence);
+  await refreshRepairQueueNotice(true);
 }
 
 async function handleItemChanged() {
@@ -268,14 +276,25 @@ async function refreshKnownMailIdentity(
     currentMailNotesId = result.mailNotesId.toString();
   }
 
-  if (showRepairStatus && result.updated) {
+  if (showRepairStatus && (result.updated || result.repairCompleted)) {
     fileLog("SHL repaired", {
       mailNotesId: result.mailNotesId,
       oldItemId: result.oldItemId,
       itemId: result.itemId,
       messageId: identity.messageId,
-      subject: identity.subject
+      subject: identity.subject,
+      updated: !!result.updated,
+      repairCompleted: !!result.repairCompleted
     });
+
+    // repairCompleted ist das eindeutige Server-Signal dafür, dass ein
+    // offener SHL-Reparaturauftrag durch diese Mail abgeschlossen wurde.
+    // Die Queue sofort nachziehen; der Repair-Watch bleibt als Absicherung
+    // für Reparaturen in einer anderen Outlook-Fensterinstanz aktiv.
+    if (result.repairCompleted) {
+      await refreshRepairQueueNotice(false);
+    }
+
     setShlStatus("repaired");
   }
 
@@ -362,11 +381,15 @@ function clearCurrentMailDisplay() {
   const btnCloseRepairQueue = document.getElementById("btn-close-repair-queue");
 
   if (btnOpenRepairQueue) {
-    btnOpenRepairQueue.onclick = () => void showRepairQueue();
+    btnOpenRepairQueue.onclick = async () => {
+      await showRepairQueue();
+      await startRepairWatch();
+    };
   }
 
   if (btnDismissRepairQueue) {
     btnDismissRepairQueue.onclick = () => {
+      stopRepairWatch();
       repairHintDismissed = true;
       hideElement("repair-queue-notice");
       setShlStatus(repairQueueCount > 0 ? "pending" : "active");
@@ -375,6 +398,7 @@ function clearCurrentMailDisplay() {
 
   if (btnCloseRepairQueue) {
     btnCloseRepairQueue.onclick = () => {
+      stopRepairWatch();
       repairHintDismissed = true;
       hideElement("repair-queue-card");
       setShlStatus(repairQueueCount > 0 ? "pending" : "active");
@@ -743,6 +767,20 @@ function setupButtons() {
       scheduleAutosave();
       void updateNoteAutocomplete(noteContent);
     };
+
+    // Outlook für Windows verwendet TAB selbst zur Fokusnavigation.
+    // Deshalb behandeln wir TAB zusätzlich in der Capture-Phase, bevor der
+    // normale Keydown-Handler und die Host-Navigation zum Zug kommen.
+    noteContent.addEventListener(
+      "keydown",
+      (event) => {
+        if (event.key === "Tab" &&
+            handleNoteAutocompleteKeyDown(noteContent, event)) {
+          event.stopImmediatePropagation();
+        }
+      },
+      true
+    );
 
     noteContent.onkeydown = (event) => {
       handleNoteAutocompleteKeyDown(noteContent, event);
@@ -1169,7 +1207,7 @@ function insertTagTerminator(editor: HTMLTextAreaElement): boolean {
 function handleNoteAutocompleteKeyDown(
   editor: HTMLTextAreaElement,
   event: KeyboardEvent
-): void {
+): boolean {
   const panel = document.getElementById("note-autocomplete");
   const autocompleteVisible = Boolean(panel && !panel.hidden && noteAutocompleteItems.length > 0);
 
@@ -1179,7 +1217,7 @@ function handleNoteAutocompleteKeyDown(
       noteAutocompleteSelectedIndex =
         (noteAutocompleteSelectedIndex + 1) % noteAutocompleteItems.length;
       renderNoteAutocomplete(editor);
-      return;
+      return true;
     }
 
     if (event.key === "ArrowUp") {
@@ -1188,19 +1226,19 @@ function handleNoteAutocompleteKeyDown(
         (noteAutocompleteSelectedIndex - 1 + noteAutocompleteItems.length) %
         noteAutocompleteItems.length;
       renderNoteAutocomplete(editor);
-      return;
+      return true;
     }
 
     if (event.key === "Enter" || event.key === "Tab") {
       event.preventDefault();
       applyNoteAutocompleteSelection(editor, noteAutocompleteSelectedIndex);
-      return;
+      return true;
     }
 
     if (event.key === "Escape") {
       event.preventDefault();
       closeNoteAutocomplete();
-      return;
+      return true;
     }
   }
 
@@ -1210,8 +1248,11 @@ function handleNoteAutocompleteKeyDown(
   if (event.key === "Tab") {
     if (insertPersonTerminator(editor) || insertTagTerminator(editor)) {
       event.preventDefault();
+      return true;
     }
   }
+
+  return false;
 }
 
 type TagInfo = {
@@ -1801,6 +1842,8 @@ async function loadStatistics(): Promise<void> {
     setInfoText("tags-count", stats.tags);
     setInfoText("persons-count", stats.persons);
     setInfoText("info-version", stats.version || "–");
+    setInfoText("info-build", __MAILNOTES_BUILD_TIME__ || "–");
+    setInfoText("info-commit", __MAILNOTES_BUILD_COMMIT__ || "–");
     setInfoText("info-status", "");
   } catch (error) {
     console.error("MailNotes-Statistik konnte nicht geladen werden:", error);
@@ -2910,6 +2953,39 @@ async function getBacklinks(
   return JSON.parse(responseText);
 }
 
+async function deleteBacklink(
+  sourceMailNotesId: string,
+  targetMailIdentity: string,
+  sourceLink: string
+): Promise<void> {
+  const url =
+    AgentUrl +
+    "/backlinks?sourceMailNotesId=" +
+    encodeURIComponent(sourceMailNotesId) +
+    "&targetMailIdentity=" +
+    encodeURIComponent(targetMailIdentity) +
+    "&sourceLink=" +
+    encodeURIComponent(sourceLink);
+
+  const response =
+    await fetch(
+      url,
+      { method: "DELETE" }
+    );
+
+  if (!response.ok) {
+    const responseText =
+      await response.text();
+
+    throw new Error(
+      "Backlink konnte nicht gelöscht werden (HTTP " +
+      response.status +
+      "): " +
+      responseText
+    );
+  }
+}
+
 async function renderBacklinks(
   mailIdentity: string,
   expectedSequence: number = itemChangeSequence
@@ -3033,8 +3109,75 @@ async function renderBacklinks(
           "Mail-Link kopieren"
         );
 
+      const deleteButton =
+        document.createElement("button");
+
+      deleteButton.className =
+        "link-action";
+
+      deleteButton.type =
+        "button";
+
+      deleteButton.title =
+        "Backlink entfernen";
+
+      deleteButton.innerHTML =
+        '<span class="icon-delete">×</span>';
+
+      deleteButton.onclick = async () => {
+        deleteButton.disabled = true;
+
+        try {
+          await deleteBacklink(
+            item.mailNotesId || "",
+            mailIdentity,
+            item.sourceLink || ""
+          );
+
+          if (
+            expectedSequence !== itemChangeSequence ||
+            getCurrentMailIdentity() !== mailIdentity
+          ) {
+            return;
+          }
+
+          await renderBacklinks(
+            mailIdentity,
+            expectedSequence
+          );
+
+          setText(
+            "mail-link-status",
+            "Backlink gelöscht."
+          );
+
+          window.setTimeout(() => {
+            if (
+              expectedSequence === itemChangeSequence &&
+              getCurrentMailIdentity() === mailIdentity
+            ) {
+              setText(
+                "mail-link-status",
+                ""
+              );
+            }
+          }, 2000);
+        } catch (error) {
+          deleteButton.disabled = false;
+          setText(
+            "mail-link-status",
+            "Backlink konnte nicht gelöscht werden."
+          );
+          console.error(error);
+        }
+      };
+
       actions.appendChild(
         copyButton
+      );
+
+      actions.appendChild(
+        deleteButton
       );
 
       row.appendChild(open);
@@ -3813,6 +3956,96 @@ async function refreshRepairQueueNotice(forceShow = false): Promise<number> {
   }
 }
 
+function stopRepairWatch(): void {
+  if (repairWatchTimer !== undefined) {
+    window.clearTimeout(repairWatchTimer);
+    repairWatchTimer = undefined;
+  }
+
+  repairWatchDeadline = 0;
+  repairWatchItemIds.clear();
+}
+
+function scheduleRepairWatch(): void {
+  if (repairWatchTimer !== undefined) {
+    window.clearTimeout(repairWatchTimer);
+  }
+
+  repairWatchTimer = window.setTimeout(() => {
+    repairWatchTimer = undefined;
+    void pollRepairWatch();
+  }, REPAIR_WATCH_INTERVAL_MS);
+}
+
+async function startRepairWatch(): Promise<void> {
+  stopRepairWatch();
+
+  try {
+    const response = await fetch(AgentUrl + "/repairqueue");
+    if (!response.ok) {
+      return;
+    }
+
+    const result = await response.json();
+    const items = (result.items || []) as RepairQueueItem[];
+
+    if (items.length === 0) {
+      finishRepairQueue();
+      return;
+    }
+
+    repairWatchItemIds = new Set(items.map((item) => item.id));
+    repairWatchDeadline = Date.now() + REPAIR_WATCH_TIMEOUT_MS;
+    scheduleRepairWatch();
+  } catch {
+    stopRepairWatch();
+  }
+}
+
+async function pollRepairWatch(): Promise<void> {
+  if (repairWatchDeadline === 0) {
+    return;
+  }
+
+  if (Date.now() >= repairWatchDeadline) {
+    stopRepairWatch();
+    return;
+  }
+
+  try {
+    const response = await fetch(AgentUrl + "/repairqueue");
+    if (!response.ok) {
+      scheduleRepairWatch();
+      return;
+    }
+
+    const result = await response.json();
+    const items = (result.items || []) as RepairQueueItem[];
+    const currentIds = new Set(items.map((item) => item.id));
+    const repaired = Array.from(repairWatchItemIds).some((id) => !currentIds.has(id));
+
+    if (repaired) {
+      repairQueueCount = items.length;
+      setShlStatus("repaired");
+
+      if (items.length === 0) {
+        finishRepairQueue();
+        return;
+      }
+
+      // Eine erfolgreiche Reparatur ist Fortschritt: Für den nächsten
+      // Queue-Eintrag beginnt das Sicherheits-Timeout erneut.
+      repairWatchItemIds = currentIds;
+      repairWatchDeadline = Date.now() + REPAIR_WATCH_TIMEOUT_MS;
+      await showRepairQueue();
+    }
+
+    scheduleRepairWatch();
+  } catch {
+    scheduleRepairWatch();
+  }
+}
+
 async function refreshRepairQueueAfterMailChange(): Promise<void> {
   const card = document.getElementById("repair-queue-card");
   const repairQueueWasOpen = !!card && !card.hidden;
@@ -3828,6 +4061,7 @@ async function refreshRepairQueueAfterMailChange(): Promise<void> {
 }
 
 function finishRepairQueue(): void {
+  stopRepairWatch();
   repairQueueCount = 0;
   repairHintDismissed = false;
   hideElement("repair-queue-notice");
@@ -3923,6 +4157,7 @@ async function showRepairQueue(): Promise<void> {
     skipButton.type = "button";
     skipButton.textContent = "Überspringen";
     skipButton.onclick = async () => {
+      stopRepairWatch();
       await setRepairQueueStatus(item.id, 3);
       await showRepairQueue();
       await refreshRepairQueueNotice();
