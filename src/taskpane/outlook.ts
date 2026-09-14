@@ -759,6 +759,9 @@ function setupButtons() {
   const btnNoteFavorite =
     document.getElementById("btn-note-favorite");
 
+  const btnNoteDelete =
+    document.getElementById("btn-note-delete");
+
   const searchCard =
     document.querySelector(".search-card");
 
@@ -864,6 +867,12 @@ function setupButtons() {
     };
   }
 
+  if (btnNoteDelete) {
+    btnNoteDelete.onclick = () => {
+      void deleteCurrentNote();
+    };
+  }
+
   document.addEventListener("click", (event) => {
     if (!searchCard) return;
 
@@ -888,6 +897,9 @@ function updateFavoriteButton(): void {
 
   button.disabled = !currentNoteExists;
   button.textContent = currentNoteIsFavorite ? "♥" : "♡";
+
+  const deleteButton = document.getElementById("btn-note-delete") as HTMLButtonElement | null;
+  if (deleteButton) deleteButton.disabled = !currentNoteExists;
   button.classList.toggle("active", currentNoteIsFavorite);
   button.setAttribute("aria-pressed", currentNoteIsFavorite ? "true" : "false");
   button.title = currentNoteIsFavorite ? "Favorit entfernen" : "Als Favorit markieren";
@@ -918,6 +930,109 @@ async function toggleCurrentNoteFavorite(): Promise<void> {
     if (favoritesFilterActive) await refreshSearchForCurrentState();
   } catch (error) {
     console.error("Favorit konnte nicht geändert werden:", error);
+    updateFavoriteButton();
+  }
+}
+
+function confirmNoteDeletion(): Promise<boolean> {
+  const overlay = document.getElementById("note-delete-confirm");
+  const cancelButton = document.getElementById("btn-note-delete-cancel") as HTMLButtonElement | null;
+  const confirmButton = document.getElementById("btn-note-delete-confirm") as HTMLButtonElement | null;
+
+  if (!overlay || !cancelButton || !confirmButton) {
+    console.error("Löschdialog ist im Taskpane nicht vorhanden.");
+    return Promise.resolve(false);
+  }
+
+  return new Promise<boolean>((resolve) => {
+    let finished = false;
+
+    const finish = (result: boolean) => {
+      if (finished) return;
+      finished = true;
+      overlay.hidden = true;
+      cancelButton.onclick = null;
+      confirmButton.onclick = null;
+      overlay.onclick = null;
+      document.removeEventListener("keydown", onKeyDown, true);
+      resolve(result);
+    };
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        event.stopPropagation();
+        finish(false);
+      }
+    };
+
+    cancelButton.onclick = () => finish(false);
+    confirmButton.onclick = () => finish(true);
+    overlay.onclick = (event) => {
+      if (event.target === overlay) finish(false);
+    };
+    document.addEventListener("keydown", onKeyDown, true);
+
+    overlay.hidden = false;
+    window.setTimeout(() => confirmButton.focus(), 0);
+  });
+}
+
+async function deleteCurrentNote(): Promise<void> {
+  if (!currentNoteExists) return;
+
+  const identity = getCurrentMailSnapshot();
+  if (!identity) return;
+
+  const confirmed = await confirmNoteDeletion();
+  if (!confirmed) return;
+
+  // Noch nicht gestartete Autosaves verwerfen und einen bereits laufenden
+  // Speichervorgang zuerst sauber beenden. So kann ein verspäteter POST die
+  // eben gelöschte Notiz nicht unmittelbar wiederherstellen.
+  cancelPendingAutosave();
+  if (autosaveActivePromise) {
+    await autosaveActivePromise;
+  }
+
+  const params = new URLSearchParams();
+  if (currentMailNotesId) params.append("mailNotesId", currentMailNotesId);
+  params.append("messageId", identity.messageId);
+
+  const deleteButton = document.getElementById("btn-note-delete") as HTMLButtonElement | null;
+  const favoriteButton = document.getElementById("btn-note-favorite") as HTMLButtonElement | null;
+  if (deleteButton) deleteButton.disabled = true;
+  if (favoriteButton) favoriteButton.disabled = true;
+
+  try {
+    const response = await fetch(AgentUrl + "/note?" + params.toString(), {
+      method: "DELETE"
+    });
+
+    if (!response.ok) {
+      throw new Error("Agent returned HTTP " + response.status);
+    }
+
+    currentNoteExists = false;
+    currentNoteIsFavorite = false;
+    invalidateNoteAutocompleteCache();
+
+    setEditorText("note-content", "");
+    setEditorText("note-links", "");
+    setNoteMeta("", "");
+    setAutosaveStatus("");
+    updateFavoriteButton();
+
+    await renderLinks(itemChangeSequence);
+    await renderBacklinks(currentMailNotesId || identity.messageId, itemChangeSequence);
+    await refreshCurrentNoteTags();
+    await refreshCurrentNotePersons();
+    await refreshStatisticsCounts();
+    await refreshSearchForCurrentState();
+    void synchronizeMailNotesCategoryForCurrentItem();
+  } catch (error) {
+    console.error("Notiz konnte nicht gelöscht werden:", error);
+    window.alert("Die Notiz konnte nicht gelöscht werden.");
     updateFavoriteButton();
   }
 }
