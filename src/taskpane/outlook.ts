@@ -12,6 +12,8 @@ let itemChangeSequence = 0;
 let currentMailNotesId = "";
 let shlStatusResetTimer: number | undefined;
 let repairQueueCount = 0;
+let currentGmlActive = false;
+let currentMailKnown = false;
 let repairHintDismissed = false;
 let repairWatchTimer: number | undefined;
 let repairWatchDeadline = 0;
@@ -180,7 +182,7 @@ async function runOutlook() {
   clearCurrentMailDisplay();
   showMailInformation();
   await loadNote(sequence);
-  await refreshRepairQueueNotice(true);
+  await refreshRepairQueueNotice(false);
 }
 
 async function handleItemChanged() {
@@ -206,6 +208,10 @@ type CurrentMailIdentity = {
   mailDate: string;
 };
 
+function normalizeOfficeText(value: unknown): string {
+  return (value || "").toString().normalize("NFC");
+}
+
 function getCurrentMailSnapshot(): CurrentMailIdentity | null {
   const item = Office.context.mailbox.item;
 
@@ -227,9 +233,12 @@ function getCurrentMailSnapshot(): CurrentMailIdentity | null {
       ((item as any).conversationId || "").toString(),
     mailboxAddress:
       (Office.context.mailbox.userProfile?.emailAddress || "").toString(),
-    subject: (item.subject || "").toString(),
+    // Outlook can return visually identical Unicode in decomposed form
+    // (for example "u" + COMBINING DIAERESIS instead of "ü").
+    // Normalize Office text before it crosses the HTTP/SQLite boundary.
+    subject: normalizeOfficeText(item.subject),
     senderName:
-      ((item as any).from?.displayName || "").toString(),
+      normalizeOfficeText((item as any).from?.displayName),
     senderAddress:
       ((item as any).from?.emailAddress || "").toString(),
     mailDate:
@@ -301,12 +310,26 @@ async function refreshKnownMailIdentity(
   return result;
 }
 
+function currentMailLinkMode(): "GML" | "SRL" {
+  return currentGmlActive ? "GML" : "SRL";
+}
+
 function setShlStatus(
   state: "active" | "repaired" | "error" | "pending"
 ) {
   const element = document.getElementById("shl-status");
 
   if (!element) {
+    return;
+  }
+
+  // Fuer eine Mail, die MailNotes noch nicht kennt, gibt es noch keinen
+  // gespeicherten Linktyp. Weder SRL noch GML behaupten und durch die reine
+  // Auswahl der Mail auch keinen Mail-Datensatz erzeugen.
+  if (!currentMailKnown) {
+    element.textContent = "";
+    element.title = "";
+    element.className = "shl-status";
     return;
   }
 
@@ -318,7 +341,7 @@ function setShlStatus(
   element.className = "shl-status " + state;
 
   if (state === "repaired") {
-    element.textContent = "🟢 SHL aktiv · Mail aktualisiert";
+    element.textContent = "🟢 " + currentMailLinkMode() + " aktiv · Mail aktualisiert";
     element.title =
       "Die technische Outlook-ID der verschobenen Mail wurde aktualisiert. Links und Backlinks sind wieder gültig.";
 
@@ -331,8 +354,8 @@ function setShlStatus(
 
   if (state === "pending") {
     element.textContent = repairQueueCount === 1
-      ? "🟡 SHL aktiv · 1 Reparatur offen"
-      : "🟡 SHL aktiv · " + repairQueueCount + " Reparaturen offen";
+      ? "🟡 " + currentMailLinkMode() + " aktiv · 1 Reparatur offen"
+      : "🟡 " + currentMailLinkMode() + " aktiv · " + repairQueueCount + " Reparaturen offen";
     element.title = repairQueueCount === 1
       ? "Ein MailLink wartet auf Reparatur. Klicken Sie auf den gelben Hinweis, sobald Sie die Reparatur fortsetzen möchten."
       : repairQueueCount + " MailLinks warten auf Reparatur.";
@@ -340,15 +363,16 @@ function setShlStatus(
   }
 
   if (state === "error") {
-    element.textContent = "🟠 SHL gestört";
+    element.textContent = "🟠 " + currentMailLinkMode() + " gestört";
     element.title =
       "Die automatische Aktualisierung konnte den MailNotesAgent nicht erreichen.";
     return;
   }
 
-  element.textContent = "🟢 SHL aktiv";
-  element.title =
-    "MailNotes aktualisiert bekannte Mails automatisch bei einem echten Outlook-Kontextwechsel.";
+  element.textContent = "🟢 " + currentMailLinkMode() + " aktiv";
+  element.title = currentGmlActive
+    ? "Für diese Mail ist GML verfügbar. Die SRL bleibt parallel erhalten und kann aus der GML aktualisiert werden."
+    : "Für diese Mail ist SRL aktiv. GML ist für diese Mail oder dieses Konto derzeit nicht verfügbar.";
 }
 
 function clearCurrentMailDisplay() {
@@ -358,6 +382,8 @@ function clearCurrentMailDisplay() {
   updateFavoriteButton();
   cancelPendingAutosave();
   currentMailNotesId = "";
+  currentGmlActive = false;
+  currentMailKnown = false;
 
   setText("mail-subject", "");
   setText("mail-from", "");
@@ -728,6 +754,15 @@ function setupButtons() {
   setupInfoPanel();
   setupDatabasePathButton();
   setupCategorySettings();
+
+  const shlStatus = document.getElementById("shl-status");
+  if (shlStatus) {
+    shlStatus.onclick = async () => {
+      if (repairQueueCount <= 0) return;
+      await showRepairQueue();
+      await startRepairWatch();
+    };
+  }
 
   const noteContent =
     document.getElementById("note-content") as HTMLTextAreaElement;
@@ -2259,13 +2294,16 @@ async function loadNote(
     // aktualisieren.
     currentMailNotesId =
       note.mailNotesId || "";
+    currentMailKnown = Boolean(currentMailNotesId);
+    currentGmlActive = Boolean(note.gmlActive);
+    setShlStatus(repairQueueCount > 0 ? "pending" : "active");
 
     const identity = getCurrentMailSnapshot();
 
-    // /mail/refresh dient zugleich als Ensure-Mail-Aufruf: Eine bisher
-    // unbekannte Mail wird in der Mail-Tabelle registriert und erhält eine
-    // MailNotesID. Eine leere Notiz wird dabei ausdrücklich nicht erzeugt.
-    if (identity) {
+    // Technische IDs nur fuer bereits in MailNotes bekannte Mails
+    // aktualisieren. Die reine Auswahl einer unbekannten Outlook-Mail darf
+    // keinen Mail-Datensatz erzeugen.
+    if (identity && currentMailKnown) {
       try {
         await refreshKnownMailIdentity(identity, true);
       } catch (refreshError) {
@@ -2466,6 +2504,12 @@ async function drainAutosave(): Promise<boolean> {
         if (snapshot.sequence === itemChangeSequence) {
           if (result.mailNotesId) {
             currentMailNotesId = result.mailNotesId.toString();
+            currentMailKnown = true;
+          }
+
+          if (typeof result.gmlActive === "boolean") {
+            currentGmlActive = result.gmlActive;
+            setShlStatus(repairQueueCount > 0 ? "pending" : "active");
           }
 
           updateNoteMetaAfterSave(result);
@@ -2738,10 +2782,10 @@ async function rememberCurrentMailLink() {
     (item as any).conversationId || "";
 
   const subject =
-    item.subject || "";
+    normalizeOfficeText(item.subject);
 
   const senderName =
-    (item as any).from?.displayName || "";
+    normalizeOfficeText((item as any).from?.displayName);
 
   const senderAddress =
     (item as any).from?.emailAddress || "";
@@ -3432,6 +3476,19 @@ async function openMailNotesLink(
         ? resolved.itemId.toString()
         : "";
 
+    console.info(
+      "[MailNotes][Resolve]",
+      {
+        url,
+        found: resolved.found,
+        type: resolved.type,
+        mailNotesId: (resolved as any).mailNotesId || "",
+        mailboxAddress: (resolved as any).mailboxAddress || "",
+        itemId: storedItemId,
+        itemIdLength: storedItemId.length
+      }
+    );
+
     if (!storedItemId) {
       await copyMessageIdFallback(
         url,
@@ -3478,6 +3535,16 @@ async function openMailNotesLink(
       candidates
     );
 
+    console.info(
+      "[MailNotes][Open] Item-ID-Kandidaten",
+      candidates.map((candidate, index) => ({
+        index,
+        itemId: candidate,
+        length: candidate.length,
+        isResolvedItemId: candidate === storedItemId
+      }))
+    );
+
     if (
       typeof mailbox.displayMessageFormAsync ===
       "function"
@@ -3509,14 +3576,30 @@ async function openMailNotesLink(
                 Office.AsyncResultStatus.Failed
               ) {
                 console.error(
-                  "Mail konnte mit Item-ID-Kandidat nicht geöffnet werden:",
-                  candidate,
-                  result.error
+                  "[MailNotes][Open] displayMessageFormAsync fehlgeschlagen",
+                  {
+                    candidateIndex: index,
+                    candidate,
+                    candidateLength: candidate.length,
+                    errorCode: result.error?.code,
+                    errorName: result.error?.name,
+                    errorMessage: result.error?.message,
+                    error: result.error
+                  }
                 );
 
                 tryCandidate(index + 1);
                 return;
               }
+
+              console.info(
+                "[MailNotes][Open] displayMessageFormAsync erfolgreich",
+                {
+                  candidateIndex: index,
+                  candidate,
+                  candidateLength: candidate.length
+                }
+              );
 
               setText(
                 "mail-link-status",
@@ -4054,8 +4137,11 @@ async function refreshRepairQueueNotice(forceShow = false): Promise<number> {
       repairHintDismissed = false;
     }
 
+    // Der Queue-Zaehler im SHL-Status ist global. Der grosse Hinweis darf
+    // deshalb nur unmittelbar nach einem neu erkannten defekten MailLink
+    // erscheinen, nicht beim Start oder beim Wechsel auf eine andere Mail.
     if (notice) {
-      notice.hidden = repairHintDismissed;
+      notice.hidden = !forceShow || repairHintDismissed;
     }
 
     setText(

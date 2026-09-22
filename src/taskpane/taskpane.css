@@ -686,6 +686,7 @@ button:disabled {
 
 .shl-status.pending {
     color: inherit;
+    cursor: pointer;
 }
 
 
