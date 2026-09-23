@@ -357,8 +357,8 @@ function setShlStatus(
       ? "🟡 " + currentMailLinkMode() + " aktiv · 1 Reparatur offen"
       : "🟡 " + currentMailLinkMode() + " aktiv · " + repairQueueCount + " Reparaturen offen";
     element.title = repairQueueCount === 1
-      ? "Ein MailLink wartet auf Reparatur. Klicken Sie auf den gelben Hinweis, sobald Sie die Reparatur fortsetzen möchten."
-      : repairQueueCount + " MailLinks warten auf Reparatur.";
+      ? "Eine Mail-Zuordnung muss repariert werden. Klicken Sie auf den gelben Hinweis, sobald Sie die Reparatur fortsetzen möchten."
+      : repairQueueCount + " Mail-Zuordnungen müssen repariert werden.";
     return;
   }
 
@@ -4138,7 +4138,7 @@ async function refreshRepairQueueNotice(forceShow = false): Promise<number> {
     }
 
     // Der Queue-Zaehler im SHL-Status ist global. Der grosse Hinweis darf
-    // deshalb nur unmittelbar nach einem neu erkannten defekten MailLink
+    // deshalb nur unmittelbar nach einer neu erkannten defekten Mail-Zuordnung
     // erscheinen, nicht beim Start oder beim Wechsel auf eine andere Mail.
     if (notice) {
       notice.hidden = !forceShow || repairHintDismissed;
@@ -4146,7 +4146,8 @@ async function refreshRepairQueueNotice(forceShow = false): Promise<number> {
 
     setText(
       "repair-queue-notice-text",
-      "Durch Verschieben von Nachrichten in andere Ordner können Links zu Mails ungültig werden. " +
+      "Die gespeicherte Outlook-Zuordnung dieser Mail ist nicht mehr gültig. " +
+      "Das kann zum Beispiel nach dem Verschieben der Mail passieren. " +
       "Die betroffene Mail suchen und in einem separaten Fenster öffnen."
     );
 
@@ -4348,7 +4349,7 @@ async function showRepairQueue(): Promise<void> {
         searchFeedback.textContent =
           "Für die Outlook-Suche in die Zwischenablage kopiert: „" + searchText + "“. " +
           "Oben im Suchfeld in Outlook einfügen, die passende Mail suchen und anschließend in einem eigenen Fenster öffnen. " +
-          "MailNotes repariert den Link dann automatisch.";
+          "MailNotes aktualisiert die Mail-Zuordnung dann automatisch.";
         searchFeedback.hidden = false;
       };
     }
@@ -4356,7 +4357,7 @@ async function showRepairQueue(): Promise<void> {
 
     const skipButton = document.createElement("button");
     skipButton.type = "button";
-    skipButton.textContent = "Überspringen";
+    skipButton.textContent = "In Zukunft ignorieren";
     skipButton.onclick = async () => {
       stopRepairWatch();
       await setRepairQueueStatus(item.id, 3);
