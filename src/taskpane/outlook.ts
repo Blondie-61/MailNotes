@@ -323,16 +323,6 @@ function setShlStatus(
     return;
   }
 
-  // Fuer eine Mail, die MailNotes noch nicht kennt, gibt es noch keinen
-  // gespeicherten Linktyp. Weder SRL noch GML behaupten und durch die reine
-  // Auswahl der Mail auch keinen Mail-Datensatz erzeugen.
-  if (!currentMailKnown) {
-    element.textContent = "";
-    element.title = "";
-    element.className = "shl-status";
-    return;
-  }
-
   if (shlStatusResetTimer !== undefined) {
     window.clearTimeout(shlStatusResetTimer);
     shlStatusResetTimer = undefined;
@@ -969,15 +959,23 @@ async function toggleCurrentNoteFavorite(): Promise<void> {
   }
 }
 
-function confirmNoteDeletion(): Promise<boolean> {
+function confirmNoteDeletion(
+  titleText = "Notiz wirklich löschen?",
+  bodyText = "Inhalt, Links, Favorit sowie Tag-/Personen-Zuordnungen werden entfernt."
+): Promise<boolean> {
   const overlay = document.getElementById("note-delete-confirm");
   const cancelButton = document.getElementById("btn-note-delete-cancel") as HTMLButtonElement | null;
   const confirmButton = document.getElementById("btn-note-delete-confirm") as HTMLButtonElement | null;
+  const title = document.getElementById("note-delete-confirm-title");
+  const text = document.getElementById("note-delete-confirm-text");
 
-  if (!overlay || !cancelButton || !confirmButton) {
+  if (!overlay || !cancelButton || !confirmButton || !title || !text) {
     console.error("Löschdialog ist im Taskpane nicht vorhanden.");
     return Promise.resolve(false);
   }
+
+  title.textContent = titleText;
+  text.textContent = bodyText;
 
   return new Promise<boolean>((resolve) => {
     let finished = false;
@@ -4116,14 +4114,30 @@ async function addRepairQueueItem(resolved: any, oldItemId: string): Promise<voi
   await refreshRepairQueueNotice(true);
 }
 
+function getRepairQueueUrl(path: "" | "/count"): string {
+  const mailboxAddress = getCurrentMailSnapshot()?.mailboxAddress.trim() || "";
+  const params = new URLSearchParams();
+
+  if (mailboxAddress) {
+    params.append("mailboxAddress", mailboxAddress);
+  }
+
+  return AgentUrl + "/repairqueue" + path +
+    (params.toString() ? "?" + params.toString() : "");
+}
+
 async function refreshRepairQueueNotice(forceShow = false): Promise<number> {
   try {
-    const response = await fetch(AgentUrl + "/repairqueue/count");
+    const response = await fetch(getRepairQueueUrl("/count"));
     if (!response.ok) return -1;
 
     const result = await response.json();
     const count = Number(result.count || 0);
     repairQueueCount = count;
+
+    if (typeof result.gmlActive === "boolean") {
+      currentGmlActive = result.gmlActive;
+    }
     const notice = document.getElementById("repair-queue-notice");
 
     if (count === 0) {
@@ -4183,7 +4197,7 @@ async function startRepairWatch(): Promise<void> {
   stopRepairWatch();
 
   try {
-    const response = await fetch(AgentUrl + "/repairqueue");
+    const response = await fetch(getRepairQueueUrl(""));
     if (!response.ok) {
       return;
     }
@@ -4215,7 +4229,7 @@ async function pollRepairWatch(): Promise<void> {
   }
 
   try {
-    const response = await fetch(AgentUrl + "/repairqueue");
+    const response = await fetch(getRepairQueueUrl(""));
     if (!response.ok) {
       scheduleRepairWatch();
       return;
@@ -4284,7 +4298,7 @@ function finishRepairQueue(): void {
 }
 
 async function showRepairQueue(): Promise<void> {
-  const response = await fetch(AgentUrl + "/repairqueue");
+  const response = await fetch(getRepairQueueUrl(""));
   if (!response.ok) throw new Error("Repair queue returned HTTP " + response.status);
   const result = await response.json();
   const items = (result.items || []) as RepairQueueItem[];
@@ -4323,7 +4337,7 @@ async function showRepairQueue(): Promise<void> {
 
     const searchButton = document.createElement("button");
     searchButton.type = "button";
-    searchButton.textContent = "Suchbegriff kopieren";
+    searchButton.textContent = "Mail suchen und neu zuordnen";
 
     const searchText = buildOutlookSearchText(item);
     if (!searchText) {
@@ -4355,16 +4369,51 @@ async function showRepairQueue(): Promise<void> {
     }
     actions.appendChild(searchButton);
 
-    const skipButton = document.createElement("button");
-    skipButton.type = "button";
-    skipButton.textContent = "In Zukunft ignorieren";
-    skipButton.onclick = async () => {
-      stopRepairWatch();
-      await setRepairQueueStatus(item.id, 3);
-      await showRepairQueue();
-      await refreshRepairQueueNotice();
+    const deleteButton = document.createElement("button");
+    deleteButton.type = "button";
+    deleteButton.textContent = "MailNotes-Eintrag löschen …";
+    deleteButton.onclick = async () => {
+      const confirmed = await confirmNoteDeletion(
+        "MailNotes-Eintrag wirklich löschen?",
+        "MailNotes kann nicht sicher feststellen, ob die Outlook-Mail gelöscht oder nur verschoben wurde. " +
+        "Wenn die Mail tatsächlich nicht mehr existiert, werden Notiz, Links, Favorit sowie Tag-/Personen-Zuordnungen entfernt."
+      );
+      if (!confirmed) return;
+
+      deleteButton.disabled = true;
+      searchButton.disabled = true;
+
+      try {
+        stopRepairWatch();
+        const params = new URLSearchParams();
+        params.append("mailNotesId", item.mailNotesId);
+        if (item.messageId) params.append("messageId", item.messageId);
+
+        const deleteResponse = await fetch(AgentUrl + "/note?" + params.toString(), {
+          method: "DELETE"
+        });
+        if (!deleteResponse.ok) {
+          throw new Error("Agent returned HTTP " + deleteResponse.status);
+        }
+
+        invalidateNoteAutocompleteCache();
+        await refreshStatisticsCounts();
+        await refreshSearchForCurrentState();
+
+        if (currentMailNotesId && currentMailNotesId === item.mailNotesId) {
+          await loadNote(itemChangeSequence);
+        }
+
+        await showRepairQueue();
+        await refreshRepairQueueNotice(false);
+      } catch (error) {
+        console.error("MailNotes-Eintrag konnte nicht gelöscht werden:", error);
+        window.alert("Der MailNotes-Eintrag konnte nicht gelöscht werden.");
+        deleteButton.disabled = false;
+        searchButton.disabled = false;
+      }
     };
-    actions.appendChild(skipButton);
+    actions.appendChild(deleteButton);
 
     row.appendChild(actions);
     row.appendChild(searchFeedback);
