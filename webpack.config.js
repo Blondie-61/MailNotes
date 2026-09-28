@@ -26,7 +26,7 @@ function getBuildTime() {
 function getBuildCommit() {
   try {
     const commit = execFileSync("git", ["rev-parse", "--short", "HEAD"], { encoding: "utf8" }).trim();
-    const dirty = execFileSync("git", ["status", "--porcelain"], { encoding: "utf8" }).trim() !== "";
+    const dirty = execFileSync("git", ["status", "--porcelain", "--untracked-files=no"], { encoding: "utf8" }).trim() !== "";
     return dirty ? `${commit}-dirty` : commit;
   } catch {
     return "unbekannt";
