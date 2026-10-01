@@ -899,9 +899,14 @@ function setupButtons() {
   }
 
   document.addEventListener("click", (event) => {
+    const target = event.target as Node | null;
+    const personContextMenu = document.getElementById("person-context-menu");
+    if (personContextMenu && (!target || !personContextMenu.contains(target))) {
+      closePersonContextMenu();
+    }
+
     if (!searchCard) return;
 
-    const target = event.target as Node | null;
     if (target && !searchCard.contains(target)) {
       const hadFilter = favoritesFilterActive || activeTags.length > 0 || activePersons.length > 0;
       setFavoritesFilterActive(false);
@@ -1607,6 +1612,102 @@ type PersonInfo = {
   count?: number;
 };
 
+function normalizePersonName(value: unknown): string {
+  return normalizeOfficeText(value).trim().toLocaleLowerCase();
+}
+
+function resolveCurrentMailPersonAddress(personName: string): string {
+  const item = Office.context.mailbox.item as any;
+  if (!item) return "";
+
+  const wantedName = normalizePersonName(personName);
+  if (!wantedName) return "";
+
+  const candidates: Array<{ displayName?: string; emailAddress?: string }> = [];
+  const addCandidate = (candidate: any) => {
+    if (candidate && typeof candidate === "object") {
+      candidates.push(candidate);
+    }
+  };
+
+  addCandidate(item.from);
+  for (const candidate of Array.isArray(item.to) ? item.to : []) addCandidate(candidate);
+  for (const candidate of Array.isArray(item.cc) ? item.cc : []) addCandidate(candidate);
+
+  const addresses = candidates
+    .filter((candidate) => normalizePersonName(candidate.displayName) === wantedName)
+    .map((candidate) => (candidate.emailAddress || "").toString().trim())
+    .filter(Boolean);
+
+  const uniqueAddresses = Array.from(new Set(addresses.map((address) => address.toLocaleLowerCase())));
+  if (uniqueAddresses.length !== 1) return "";
+
+  return addresses.find((address) => address.toLocaleLowerCase() === uniqueAddresses[0]) || "";
+}
+
+function composeMailToPerson(person: PersonInfo): void {
+  const emailAddress = resolveCurrentMailPersonAddress(person.name);
+  const form: any = {};
+
+  // Nur eine eindeutig aus der aktuellen Mail ermittelte SMTP-Adresse
+  // vorbelegen. Einen bloßen Anzeigenamen behandelt Outlook hier als
+  // ungültige Mailadresse, statt die normale Namensauflösung auszuführen.
+  if (emailAddress) {
+    form.toRecipients = [emailAddress];
+  }
+
+  try {
+    Office.context.mailbox.displayNewMessageForm(form);
+  } catch (error) {
+    console.error("Neue E-Mail konnte nicht geöffnet werden:", error);
+  }
+}
+
+function filterNotesByPerson(person: PersonInfo): void {
+  setActivePersons([person]);
+  closePersonContextMenu();
+  void refreshSearchForCurrentState();
+  document.querySelector(".search-card")?.scrollIntoView({ block: "nearest" });
+}
+
+function closePersonContextMenu(): void {
+  document.getElementById("person-context-menu")?.remove();
+}
+
+function showPersonContextMenu(person: PersonInfo, clientX: number, clientY: number): void {
+  closePersonContextMenu();
+
+  const menu = document.createElement("div");
+  menu.id = "person-context-menu";
+  menu.className = "person-context-menu";
+  menu.setAttribute("role", "menu");
+
+  const addItem = (label: string, action: () => void) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "person-context-menu-item";
+    button.textContent = label;
+    button.onclick = (event) => {
+      event.stopPropagation();
+      closePersonContextMenu();
+      action();
+    };
+    menu.appendChild(button);
+  };
+
+  addItem("E-Mail schreiben", () => composeMailToPerson(person));
+  addItem("Notizen mit " + person.name, () => filterNotesByPerson(person));
+
+  document.body.appendChild(menu);
+
+  const rect = menu.getBoundingClientRect();
+  const margin = 6;
+  const left = Math.max(margin, Math.min(clientX, window.innerWidth - rect.width - margin));
+  const top = Math.max(margin, Math.min(clientY, window.innerHeight - rect.height - margin));
+  menu.style.left = left + "px";
+  menu.style.top = top + "px";
+}
+
 function isPersonActive(normalizedName: string): boolean {
   return activePersons.some((person) => person.normalizedName === normalizedName);
 }
@@ -1782,12 +1883,16 @@ async function refreshCurrentNotePersons(): Promise<void> {
       button.className = "note-person";
       button.dataset.normalizedName = person.normalizedName || person.name;
       button.textContent = "@" + person.name;
-      button.title = "Nach @" + person.name + " filtern";
+      button.title = "E-Mail an " + person.name + " schreiben";
       button.onclick = (event) => {
         event.stopPropagation();
-        togglePersonSelection(person);
-        void refreshSearchForCurrentState();
-        document.querySelector(".search-card")?.scrollIntoView({ block: "nearest" });
+        closePersonContextMenu();
+        composeMailToPerson(person);
+      };
+      button.oncontextmenu = (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        showPersonContextMenu(person, event.clientX, event.clientY);
       };
       fragment.appendChild(button);
     }

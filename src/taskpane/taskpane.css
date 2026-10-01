@@ -979,17 +979,46 @@ button:disabled {
     padding: 3px 7px;
     border: 0;
     border-radius: 999px;
-    background: #f2f2f4;
-    color: #55555a;
+    background: #e8f4ff;
+    color: #245b7a;
     font: inherit;
     font-size: 11px;
     cursor: pointer;
 }
 
 .note-person:hover {
-    background: #f4f0fb;
-    color: #6b4b8f;
+    background: #d8ecff;
+    color: #174d6d;
 }
+
+.person-context-menu {
+    position: fixed;
+    z-index: 1000;
+    min-width: 190px;
+    padding: 5px;
+    border: 1px solid #d7d7dc;
+    border-radius: 9px;
+    background: #ffffff;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.16);
+}
+
+.person-context-menu[hidden] { display: none; }
+
+.person-context-menu-item {
+    display: block;
+    width: 100%;
+    padding: 7px 8px;
+    border: 0;
+    border-radius: 6px;
+    background: transparent;
+    color: #1d1d1f;
+    font: inherit;
+    font-size: 12px;
+    text-align: left;
+    cursor: pointer;
+}
+
+.person-context-menu-item:hover { background: #eef6ff; }
 
 .search-clear-button {
     width: 40px;
