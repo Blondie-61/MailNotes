@@ -5,15 +5,19 @@ const path = require("path");
 
 const config = require("../mailnotes.config");
 
-const manifestFile = path.join(__dirname, "..", "docs", "manifest.xml");
+const manifestFiles = [
+  path.join(__dirname, "..", "manifest.xml"),
+  path.join(__dirname, "..", "docs", "manifest.xml"),
+];
 
-if (!fs.existsSync(manifestFile)) {
-  console.error("Manifest nicht gefunden:");
-  console.error(manifestFile);
-  process.exit(1);
-}
+for (const manifestFile of manifestFiles) {
+  if (!fs.existsSync(manifestFile)) {
+    console.error("Manifest nicht gefunden:");
+    console.error(manifestFile);
+    process.exit(1);
+  }
 
-let xml = fs.readFileSync(manifestFile, "utf8");
+  let xml = fs.readFileSync(manifestFile, "utf8");
 
 function xmlEscape(value) {
   return String(value)
@@ -120,9 +124,7 @@ xml = xml.replace(
   ].join("\n")
 );
 
-fs.writeFileSync(manifestFile, xml, "utf8");
+  fs.writeFileSync(manifestFile, xml, "utf8");
+}
 
-console.log("Manifest erfolgreich aktualisiert.");
-console.log("Version :", config.version);
-console.log("BaseURL :", baseUrl);
-console.log("Taskpane:", `${baseUrl}/taskpane.html`);
+console.log("Manifeste erfolgreich aktualisiert.");

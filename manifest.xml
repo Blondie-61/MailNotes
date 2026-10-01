@@ -7,7 +7,7 @@
   xsi:type="MailApp">
 
   <Id>DF769706-2458-41DB-B120-B45BA42CBB9C</Id>
-  <Version>1.1.0.1</Version>
+  <Version>1.1.2.0</Version>
   <ProviderName>MailNotes</ProviderName>
   <DefaultLocale>en-US</DefaultLocale>
 
@@ -16,11 +16,11 @@
 
   <IconUrl DefaultValue="https://localhost:48571/assets/icon-64.png"/>
   <HighResolutionIconUrl DefaultValue="https://localhost:48571/assets/icon-128.png"/>
-  <SupportUrl DefaultValue="https://localhost:48571"/>
+  <SupportUrl DefaultValue="https://blondie-61.github.io"/>
 
   <AppDomains>
-    <AppDomain>https://localhost:48571</AppDomain>
-  </AppDomains>
+  <AppDomain>https://localhost:48571</AppDomain>
+</AppDomains>
 
   <Hosts>
     <Host Name="Mailbox"/>
