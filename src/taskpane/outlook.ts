@@ -755,7 +755,7 @@ function setupButtons() {
   }
 
   const noteContent =
-    document.getElementById("note-content") as HTMLTextAreaElement;
+    document.getElementById("note-content") as HTMLElement;
 
   const btnAddLink =
     document.getElementById("btn-add-link");
@@ -791,9 +791,25 @@ function setupButtons() {
     document.querySelector(".search-card");
 
   if (noteContent) {
+    let autocompleteTimer: number | undefined;
+
+    const scheduleAutocompleteUpdate = () => {
+      if (autocompleteTimer !== undefined) {
+        window.clearTimeout(autocompleteTimer);
+      }
+
+      autocompleteTimer = window.setTimeout(() => {
+        autocompleteTimer = undefined;
+        void updateNoteAutocomplete(noteContent);
+      }, 60);
+    };
+
     noteContent.oninput = () => {
+      // Im contenteditable sind innerText/DOM-Selection deutlich teurer als
+      // textarea.value/selectionStart. Beides deshalb aus dem Tastatur-Hotpath
+      // heraushalten und erst nach einer kurzen Tipp-Pause auswerten.
       scheduleAutosave();
-      void updateNoteAutocomplete(noteContent);
+      scheduleAutocompleteUpdate();
     };
 
     // Outlook für Windows verwendet TAB selbst zur Fokusnavigation.
@@ -826,6 +842,10 @@ function setupButtons() {
     };
 
     noteContent.onblur = () => {
+      if (autocompleteTimer !== undefined) {
+        window.clearTimeout(autocompleteTimer);
+        autocompleteTimer = undefined;
+      }
       window.setTimeout(closeNoteAutocomplete, 120);
       void requestAutosave(true);
     };
@@ -1105,11 +1125,76 @@ function invalidateNoteAutocompleteCache(): void {
   noteAutocompletePersons = null;
 }
 
+function getNoteEditorSelection(editor: HTMLElement): { start: number; end: number } | null {
+  const selection = window.getSelection();
+  if (!selection || selection.rangeCount === 0) return null;
+
+  const range = selection.getRangeAt(0);
+  if (!editor.contains(range.startContainer) || !editor.contains(range.endContainer)) {
+    return null;
+  }
+
+  const startRange = range.cloneRange();
+  startRange.selectNodeContents(editor);
+  startRange.setEnd(range.startContainer, range.startOffset);
+
+  const endRange = range.cloneRange();
+  endRange.selectNodeContents(editor);
+  endRange.setEnd(range.endContainer, range.endOffset);
+
+  return {
+    start: startRange.toString().length,
+    end: endRange.toString().length
+  };
+}
+
+function setNoteEditorCaret(editor: HTMLElement, offset: number): void {
+  const range = document.createRange();
+  const selection = window.getSelection();
+  const walker = document.createTreeWalker(editor, NodeFilter.SHOW_TEXT);
+  let remaining = Math.max(0, offset);
+  let node: Node | null = walker.nextNode();
+
+  while (node) {
+    const length = node.textContent?.length ?? 0;
+    if (remaining <= length) {
+      range.setStart(node, remaining);
+      range.collapse(true);
+      selection?.removeAllRanges();
+      selection?.addRange(range);
+      return;
+    }
+    remaining -= length;
+    node = walker.nextNode();
+  }
+
+  range.selectNodeContents(editor);
+  range.collapse(false);
+  selection?.removeAllRanges();
+  selection?.addRange(range);
+}
+
+function replaceNoteEditorRange(
+  editor: HTMLElement,
+  start: number,
+  end: number,
+  replacement: string
+): number {
+  const text = getEditorText("note-content");
+  setEditorText("note-content", text.substring(0, start) + replacement + text.substring(end));
+  const caret = start + replacement.length;
+  editor.focus();
+  setNoteEditorCaret(editor, caret);
+  return caret;
+}
+
 function getNoteAutocompleteContext(
-  editor: HTMLTextAreaElement
+  editor: HTMLElement
 ): NoteAutocompleteContext | null {
-  const caret = editor.selectionStart ?? editor.value.length;
-  const textBeforeCaret = editor.value.substring(0, caret);
+  const selection = getNoteEditorSelection(editor);
+  const text = getEditorText("note-content");
+  const caret = selection?.end ?? text.length;
+  const textBeforeCaret = text.substring(0, caret);
   const lineStart = Math.max(
     textBeforeCaret.lastIndexOf("\n"),
     textBeforeCaret.lastIndexOf("\r")
@@ -1126,7 +1211,7 @@ function getNoteAutocompleteContext(
   const absoluteMarkerPos = lineStart + markerPos;
 
   if (absoluteMarkerPos > 0) {
-    const previous = editor.value.charAt(absoluteMarkerPos - 1);
+    const previous = text.charAt(absoluteMarkerPos - 1);
     if (previous !== " " && previous !== "\t" && previous !== "\n" && previous !== "\r") {
       return null;
     }
@@ -1135,33 +1220,17 @@ function getNoteAutocompleteContext(
   const query = line.substring(markerPos + 1);
 
   if (marker === "#") {
-    // Tags enthalten keine Leerzeichen. Sobald eines getippt wurde,
-    // ist der Tag abgeschlossen und Auto-Complete verschwindet.
     if (/\s/.test(query) || query.indexOf("@") >= 0 || query.indexOf("#") >= 0) {
       return null;
     }
-
-    return {
-      kind: "tag",
-      start: absoluteMarkerPos,
-      end: caret,
-      query
-    };
+    return { kind: "tag", start: absoluteMarkerPos, end: caret, query };
   }
 
-  // Personen dürfen Leerzeichen, Bindestriche, Apostrophe und Punkte
-  // enthalten. TAB beendet den Namen explizit und darf daher nicht
-  // innerhalb der aktuellen Query vorkommen.
   if (query.indexOf("\t") >= 0 || query.indexOf("#") >= 0 || query.indexOf("@") >= 0) {
     return null;
   }
 
-  return {
-    kind: "person",
-    start: absoluteMarkerPos,
-    end: caret,
-    query
-  };
+  return { kind: "person", start: absoluteMarkerPos, end: caret, query };
 }
 
 async function loadNoteAutocompleteItems(
@@ -1214,7 +1283,7 @@ function rankNoteAutocompleteItems(
     .slice(0, 8);
 }
 
-async function updateNoteAutocomplete(editor: HTMLTextAreaElement): Promise<void> {
+async function updateNoteAutocomplete(editor: HTMLElement): Promise<void> {
   const context = getNoteAutocompleteContext(editor);
   if (!context) {
     closeNoteAutocomplete();
@@ -1249,7 +1318,7 @@ async function updateNoteAutocomplete(editor: HTMLTextAreaElement): Promise<void
   }
 }
 
-function renderNoteAutocomplete(editor: HTMLTextAreaElement): void {
+function renderNoteAutocomplete(editor: HTMLElement): void {
   const panel = document.getElementById("note-autocomplete");
   if (!panel || !noteAutocompleteKind || noteAutocompleteItems.length === 0) {
     closeNoteAutocomplete();
@@ -1277,8 +1346,8 @@ function renderNoteAutocomplete(editor: HTMLTextAreaElement): void {
     }
 
     button.onmousedown = (event) => {
-      // Fokus im Texteditor behalten, damit selectionStart/selectionEnd
-      // für das Ersetzen des Tokens erhalten bleiben.
+      // Fokus und DOM-Selection im Texteditor behalten, damit das
+      // aktuelle Token beim Anklicken eines Vorschlags erhalten bleibt.
       event.preventDefault();
     };
 
@@ -1293,7 +1362,7 @@ function renderNoteAutocomplete(editor: HTMLTextAreaElement): void {
 }
 
 function applyNoteAutocompleteSelection(
-  editor: HTMLTextAreaElement,
+  editor: HTMLElement,
   index: number
 ): void {
   const context = getNoteAutocompleteContext(editor);
@@ -1308,57 +1377,38 @@ function applyNoteAutocompleteSelection(
   const terminator = context.kind === "person" ? "\t" : " ";
   const replacement = marker + item.name + terminator;
 
-  editor.value =
-    editor.value.substring(0, context.start) +
-    replacement +
-    editor.value.substring(context.end);
-
-  const newCaret = context.start + replacement.length;
-  editor.focus();
-  editor.setSelectionRange(newCaret, newCaret);
+  replaceNoteEditorRange(editor, context.start, context.end, replacement);
 
   closeNoteAutocomplete();
   scheduleAutosave();
 }
 
-function insertPersonTerminator(editor: HTMLTextAreaElement): boolean {
+function insertPersonTerminator(editor: HTMLElement): boolean {
   const context = getNoteAutocompleteContext(editor);
   if (!context || context.kind !== "person" || context.query.trim().length < 2) {
     return false;
   }
 
-  editor.value =
-    editor.value.substring(0, context.end) +
-    "\t" +
-    editor.value.substring(context.end);
-
-  const newCaret = context.end + 1;
-  editor.setSelectionRange(newCaret, newCaret);
+  replaceNoteEditorRange(editor, context.end, context.end, "\t");
   closeNoteAutocomplete();
   scheduleAutosave();
   return true;
 }
 
-function insertTagTerminator(editor: HTMLTextAreaElement): boolean {
+function insertTagTerminator(editor: HTMLElement): boolean {
   const context = getNoteAutocompleteContext(editor);
   if (!context || context.kind !== "tag" || context.query.trim().length < 1) {
     return false;
   }
 
-  editor.value =
-    editor.value.substring(0, context.end) +
-    " " +
-    editor.value.substring(context.end);
-
-  const newCaret = context.end + 1;
-  editor.setSelectionRange(newCaret, newCaret);
+  replaceNoteEditorRange(editor, context.end, context.end, " ");
   closeNoteAutocomplete();
   scheduleAutosave();
   return true;
 }
 
 function handleNoteAutocompleteKeyDown(
-  editor: HTMLTextAreaElement,
+  editor: HTMLElement,
   event: KeyboardEvent
 ): boolean {
   const panel = document.getElementById("note-autocomplete");
@@ -2533,7 +2583,9 @@ function scheduleAutosave(): void {
   }
 
   autosaveRevision++;
-  autosavePendingSnapshot = createNoteSaveSnapshot(autosaveRevision);
+  // Snapshot erst beim tatsächlichen Speichern erzeugen. Insbesondere
+  // getEditorText() -> innerText darf bei contenteditable nicht bei jedem
+  // Tastendruck synchron einen Layout-/DOM-Lauf erzwingen.
   setAutosaveStatus("Nicht gespeichert");
 
   if (autosaveTimer !== undefined) {
@@ -2549,6 +2601,11 @@ function scheduleAutosave(): void {
 async function requestAutosave(immediate: boolean): Promise<boolean> {
   if (autosaveSuppressed) {
     return false;
+  }
+
+  if (autosaveRevision > autosaveCompletedRevision &&
+      autosavePendingSnapshot?.revision !== autosaveRevision) {
+    autosavePendingSnapshot = createNoteSaveSnapshot(autosaveRevision);
   }
 
   if (autosaveRevision <= autosaveCompletedRevision) {
@@ -4093,35 +4150,29 @@ function getCurrentMessageId(): string {
 function getEditorText(
   id: string
 ): string {
-  const element =
-    document.getElementById(
-      id
-    ) as HTMLTextAreaElement;
+  const element = document.getElementById(id);
+  if (!element) return "";
 
-  if (!element) {
-    return "";
+  if (element instanceof HTMLTextAreaElement || element instanceof HTMLInputElement) {
+    return element.value;
   }
 
-  return element.value;
+  return element.innerText ?? "";
 }
 
 function setEditorText(
   id: string,
   value: any
 ) {
-  const element =
-    document.getElementById(
-      id
-    ) as HTMLTextAreaElement;
+  const element = document.getElementById(id);
+  if (!element) return;
 
-  if (!element) {
-    return;
+  const text = value ? value.toString() : "";
+  if (element instanceof HTMLTextAreaElement || element instanceof HTMLInputElement) {
+    element.value = text;
+  } else {
+    element.textContent = text;
   }
-
-  element.value =
-    value
-      ? value.toString()
-      : "";
 }
 
 function setNoteMeta(

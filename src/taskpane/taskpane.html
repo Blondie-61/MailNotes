@@ -170,10 +170,13 @@
             </div>
 
             <div class="note-editor-wrap">
-                <textarea
+                <div
                     id="note-content"
                     class="note-editor"
-                    placeholder="Für diese E-Mail existiert noch keine Notiz."></textarea>
+                    contenteditable="true"
+                    role="textbox"
+                    aria-multiline="true"
+                    data-placeholder="Für diese E-Mail existiert noch keine Notiz."></div>
 
                 <div id="note-autocomplete" class="note-autocomplete" hidden></div>
             </div>

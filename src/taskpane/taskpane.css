@@ -212,6 +212,9 @@ h1 {
     padding: 12px;
 
     resize: vertical;
+    overflow: auto;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
 
     font-family: inherit;
     font-size: 14px;
@@ -225,6 +228,12 @@ h1 {
     border: 1px solid #c7c7cc;
     border-radius: 10px;
     outline: none;
+}
+
+.note-editor:empty::before {
+    content: attr(data-placeholder);
+    color: #8e8e93;
+    pointer-events: none;
 }
 
 .note-editor:focus,
