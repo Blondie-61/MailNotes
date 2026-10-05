@@ -70,6 +70,7 @@ type NoteAutocompleteContext = {
 let noteAutocompleteKind: NoteAutocompleteKind | null = null;
 let noteAutocompleteItems: NoteAutocompleteItem[] = [];
 let noteAutocompleteSelectedIndex = 0;
+let noteAutocompleteContext: NoteAutocompleteContext | null = null;
 let noteAutocompleteTags: TagInfo[] | null = null;
 let noteAutocompletePersons: PersonInfo[] | null = null;
 let noteAutocompleteRequestSequence = 0;
@@ -183,6 +184,7 @@ async function runOutlook() {
   showMailInformation();
   await loadNote(sequence);
   await refreshRepairQueueNotice(false);
+  await refreshPendingOpenNotice();
 }
 
 async function handleItemChanged() {
@@ -195,6 +197,7 @@ async function handleItemChanged() {
   showMailInformation();
   await loadNote(sequence);
   await refreshRepairQueueAfterMailChange();
+  await refreshPendingOpenNotice();
 }
 
 type CurrentMailIdentity = {
@@ -792,6 +795,7 @@ function setupButtons() {
 
   if (noteContent) {
     let autocompleteTimer: number | undefined;
+    let notePersonsTimer: number | undefined;
 
     const scheduleAutocompleteUpdate = () => {
       if (autocompleteTimer !== undefined) {
@@ -804,12 +808,137 @@ function setupButtons() {
       }, 60);
     };
 
+    noteContent.addEventListener("beforeinput", (event) => {
+      if (!event.inputType.startsWith("insert") || event.inputType === "insertParagraph") {
+        return;
+      }
+
+      const selection = window.getSelection();
+      if (!selection || !selection.isCollapsed || selection.rangeCount === 0) return;
+
+      const range = selection.getRangeAt(0);
+      let node: Node | null = range.startContainer;
+      const token =
+        node instanceof Element
+          ? node.closest(".note-person-token") as HTMLElement | null
+          : node?.parentElement?.closest(".note-person-token") as HTMLElement | null;
+
+      if (!token || !noteContent.contains(token)) return;
+
+      const tokenTextLength = token.textContent?.length ?? 0;
+      const tokenRange = document.createRange();
+      tokenRange.selectNodeContents(token);
+      tokenRange.setEnd(range.startContainer, range.startOffset);
+      const offsetInToken = tokenRange.toString().length;
+
+      // Innerhalb des Namens darf weiter editiert werden. Nur an den beiden
+      // Außenkanten verlassen wir den Highlight-Span, damit neu getippter Text
+      // nicht versehentlich Teil von @Person wird.
+      if (offsetInToken !== 0 && offsetInToken !== tokenTextLength) return;
+
+      // WebKit behaelt an einer contenteditable-Span-Grenze gern den
+      // Formatierungskontext des Spans bei. Ein blosses Verschieben des Carets
+      // vor/hinter den Token reicht deshalb nicht: das naechste Zeichen landet
+      // trotzdem wieder im blauen Span. Normale Texteingabe an der Aussenkante
+      // fuegen wir daher explizit als Geschwister-Textknoten ein.
+      if (event.inputType === "insertText" && event.data) {
+        event.preventDefault();
+
+        // Direkt hinter einem Person-Token gehoert ein weiteres gueltiges
+        // Namenszeichen noch zum Namen. Das verhindert, dass beim freien
+        // Tippen nach einem zwischenzeitlichen Highlight der letzte Buchstabe
+        // ausserhalb des blauen Spans landet. Trenner wie Leerzeichen/TAB
+        // bleiben dagegen ausserhalb und beenden die aktuelle Eingabe.
+        if (
+          offsetInToken === tokenTextLength &&
+          Array.from(event.data).every((ch) => isPersonNameLetter(ch) || ch === "-" || ch === "'" || ch === "’" || ch === ".")
+        ) {
+          const tokenText = token.lastChild instanceof Text ? token.lastChild : null;
+          if (tokenText) {
+            tokenText.data += event.data;
+          } else {
+            token.appendChild(document.createTextNode(event.data));
+          }
+
+          const inside = document.createRange();
+          inside.selectNodeContents(token);
+          inside.collapse(false);
+          selection.removeAllRanges();
+          selection.addRange(inside);
+
+          scheduleAutocompleteUpdate();
+          scheduleAutosave();
+          return;
+        }
+
+        const textNode = document.createTextNode(event.data);
+        if (offsetInToken === 0) {
+          token.parentNode?.insertBefore(textNode, token);
+        } else {
+          token.parentNode?.insertBefore(textNode, token.nextSibling);
+        }
+
+        const outside = document.createRange();
+        outside.setStart(textNode, event.data.length);
+        outside.collapse(true);
+        selection.removeAllRanges();
+        selection.addRange(outside);
+
+        scheduleAutocompleteUpdate();
+        scheduleAutosave();
+        return;
+      }
+
+      // Fuer andere Insert-Arten (z. B. Paste) bleibt die bisherige
+      // Caret-Normalisierung als Fallback erhalten.
+      const outside = document.createRange();
+      if (offsetInToken === 0) {
+        outside.setStartBefore(token);
+      } else {
+        outside.setStartAfter(token);
+      }
+      outside.collapse(true);
+      selection.removeAllRanges();
+      selection.addRange(outside);
+    });
+
     noteContent.oninput = () => {
       // Im contenteditable sind innerText/DOM-Selection deutlich teurer als
       // textarea.value/selectionStart. Beides deshalb aus dem Tastatur-Hotpath
       // heraushalten und erst nach einer kurzen Tipp-Pause auswerten.
       scheduleAutosave();
       scheduleAutocompleteUpdate();
+
+      // Personen-Chips zeigen den aktuellen Editorinhalt, aber auch diese
+      // DOM-Auswertung bleibt per Debounce ausserhalb des Tastatur-Hotpaths.
+      if (notePersonsTimer !== undefined) {
+        window.clearTimeout(notePersonsTimer);
+      }
+      notePersonsTimer = window.setTimeout(() => {
+        notePersonsTimer = undefined;
+
+        // Semantisches Highlighting ist bewusst kein Teil des Tipp-Hotpaths.
+        // Solange ein #/@-Autocomplete sichtbar ist, lassen wir dessen Token
+        // komplett in Ruhe. Ein DOM-Rewrite waehrend der Auswahl kann sonst
+        // Caret/Range invalidieren und TAB an die normale Fokusnavigation
+        // durchfallen lassen.
+        const panel = document.getElementById("note-autocomplete");
+        const autocompleteVisible = Boolean(
+          panel && !panel.hidden && noteAutocompleteItems.length > 0 && noteAutocompleteKind
+        );
+
+        if (autocompleteVisible) {
+          notePersonsTimer = window.setTimeout(() => {
+            notePersonsTimer = undefined;
+            syncNotePersonHighlights(noteContent);
+            void refreshCurrentNotePersons();
+          }, 250);
+          return;
+        }
+
+        syncNotePersonHighlights(noteContent);
+        void refreshCurrentNotePersons();
+      }, 250);
     };
 
     // Outlook für Windows verwendet TAB selbst zur Fokusnavigation.
@@ -834,6 +963,45 @@ function setupButtons() {
       void updateNoteAutocomplete(noteContent);
     };
 
+    // Rechtsklick direkt auf einen hervorgehobenen @Person-Token oeffnet
+    // dasselbe Personen-Kontextmenue wie der Personen-Chip unter dem Editor.
+    noteContent.oncontextmenu = (event) => {
+      const target = event.target instanceof Element
+        ? event.target.closest(".note-person-token") as HTMLElement | null
+        : null;
+      if (!target || !noteContent.contains(target)) return;
+
+      const personName = (target.dataset.personName || "").trim();
+      if (!personName) return;
+
+      event.preventDefault();
+      event.stopPropagation();
+      showPersonContextMenu(
+        { name: personName, normalizedName: normalizePersonName(personName) },
+        event.clientX,
+        event.clientY
+      );
+    };
+
+    // Der Browser markiert bei Doppelklick normalerweise nur ein einzelnes
+    // Wort. Innerhalb von @Person markieren wir stattdessen den kompletten
+    // Person-Token inklusive @; ausserhalb bleibt das Standardverhalten.
+    noteContent.ondblclick = (event) => {
+      const target = event.target instanceof Element
+        ? event.target.closest(".note-person-token") as HTMLElement | null
+        : null;
+      if (!target || !noteContent.contains(target)) return;
+
+      const selection = window.getSelection();
+      if (!selection) return;
+
+      const range = document.createRange();
+      range.selectNodeContents(target);
+      selection.removeAllRanges();
+      selection.addRange(range);
+      event.preventDefault();
+    };
+
     noteContent.onkeyup = (event) => {
       if (event.key === "ArrowLeft" || event.key === "ArrowRight" ||
           event.key === "Home" || event.key === "End") {
@@ -845,6 +1013,10 @@ function setupButtons() {
       if (autocompleteTimer !== undefined) {
         window.clearTimeout(autocompleteTimer);
         autocompleteTimer = undefined;
+      }
+      if (notePersonsTimer !== undefined) {
+        window.clearTimeout(notePersonsTimer);
+        notePersonsTimer = undefined;
       }
       window.setTimeout(closeNoteAutocomplete, 120);
       void requestAutosave(true);
@@ -1108,6 +1280,7 @@ async function refreshStatisticsCounts(): Promise<void> {
 }
 
 function closeNoteAutocomplete(): void {
+  noteAutocompleteContext = null;
   noteAutocompleteKind = null;
   noteAutocompleteItems = [];
   noteAutocompleteSelectedIndex = 0;
@@ -1186,6 +1359,124 @@ function replaceNoteEditorRange(
   editor.focus();
   setNoteEditorCaret(editor, caret);
   return caret;
+}
+
+type NotePersonMatch = {
+  start: number;
+  end: number;
+  text: string;
+  name: string;
+};
+
+function isPersonNameLetter(ch: string): boolean {
+  return /^\p{L}$/u.test(ch);
+}
+
+function findNotePersons(text: string): NotePersonMatch[] {
+  const result: NotePersonMatch[] = [];
+  let pos = 0;
+
+  while (pos < text.length) {
+    if (text[pos] !== "@") {
+      pos++;
+      continue;
+    }
+
+    const previous = pos > 0 ? text[pos - 1] : "";
+    if (pos > 0 && previous !== " " && previous !== "\t" && previous !== "\n" && previous !== "\r") {
+      pos++;
+      continue;
+    }
+
+    let scan = pos + 1;
+    while (scan < text.length && text[scan] !== "\r" && text[scan] !== "\n") {
+      const ch = text[scan];
+
+      // Dieselben Namensregeln wie im Agent: Buchstaben, Leerzeichen,
+      // Bindestrich und Apostrophe. TAB beendet einen Personentag explizit.
+      if (isPersonNameLetter(ch) || ch === " " || ch === "-" || ch === "'" || ch === "’") {
+        scan++;
+        continue;
+      }
+
+      // Ein Punkt gehoert nur dann zum Namen, wenn direkt danach ein
+      // weiterer Buchstabe folgt (z. B. @J.R.Ewing).
+      if (ch === "." && scan + 1 < text.length && isPersonNameLetter(text[scan + 1])) {
+        scan++;
+        continue;
+      }
+
+      break;
+    }
+
+    const rawName = text.substring(pos + 1, scan);
+    const name = rawName.trim();
+    const letterCount = Array.from(name).filter(isPersonNameLetter).length;
+
+    if (letterCount >= 2) {
+      // Leerzeichen unmittelbar vor dem naechsten Trenner gehoeren nicht
+      // zur sichtbaren Hervorhebung, wohl aber weiterhin zum Plaintext.
+      const trailingWhitespace = rawName.length - rawName.trimEnd().length;
+      const end = scan - trailingWhitespace;
+      result.push({ start: pos, end, text: text.substring(pos, end), name });
+    }
+
+    pos = Math.max(scan, pos + 1);
+  }
+
+  return result;
+}
+
+function renderNotePersonHighlights(editor: HTMLElement, caretOffset?: number): void {
+  const text = getEditorText("note-content");
+  const fragment = document.createDocumentFragment();
+  const persons = findNotePersons(text);
+  let lastIndex = 0;
+
+  for (const match of persons) {
+    if (match.start > lastIndex) {
+      fragment.appendChild(document.createTextNode(text.substring(lastIndex, match.start)));
+    }
+
+    const person = document.createElement("span");
+    person.className = "note-person-token";
+    person.dataset.personName = match.name;
+    person.textContent = match.text;
+    fragment.appendChild(person);
+    lastIndex = match.end;
+  }
+
+  if (lastIndex < text.length) {
+    fragment.appendChild(document.createTextNode(text.substring(lastIndex)));
+  }
+
+  editor.replaceChildren(fragment);
+
+  if (caretOffset !== undefined) {
+    editor.focus();
+    setNoteEditorCaret(editor, caretOffset);
+  }
+}
+
+function syncNotePersonHighlights(editor: HTMLElement): void {
+  const text = getEditorText("note-content");
+  const expected = findNotePersons(text).map((person) => person.text);
+  const current = Array.from(editor.querySelectorAll<HTMLElement>(".note-person-token"))
+    .map((token) => token.textContent ?? "");
+
+  const unchanged =
+    expected.length === current.length &&
+    expected.every((person, index) => person === current[index]);
+
+  if (unchanged) return;
+
+  // Nur wenn sich die semantischen @Person-Grenzen wirklich geaendert haben,
+  // wird das DOM neu aufgebaut. So bleibt normales Tippen/Cursor-Navigieren
+  // schnell, waehrend z. B. x@Name sofort seine Markierung verliert und
+  // x @Name sie wieder erhaelt.
+  const selection = getNoteEditorSelection(editor);
+  const caret = selection?.end;
+  renderNotePersonHighlights(editor, caret);
 }
 
 function getNoteAutocompleteContext(
@@ -1286,9 +1577,11 @@ function rankNoteAutocompleteItems(
 async function updateNoteAutocomplete(editor: HTMLElement): Promise<void> {
   const context = getNoteAutocompleteContext(editor);
   if (!context) {
+    noteAutocompleteContext = null;
     closeNoteAutocomplete();
     return;
   }
+  noteAutocompleteContext = context;
 
   const requestSequence = ++noteAutocompleteRequestSequence;
 
@@ -1365,6 +1658,9 @@ function applyNoteAutocompleteSelection(
   editor: HTMLElement,
   index: number
 ): void {
+  // Immer den aktuellen Caret-Kontext verwenden. Der zwischengespeicherte
+  // Kontext kann durch das 60-ms-Debounce noch den Stand vor dem zuletzt
+  // getippten Zeichen enthalten (z. B. @d statt @da).
   const context = getNoteAutocompleteContext(editor);
   const item = noteAutocompleteItems[index];
 
@@ -1377,10 +1673,16 @@ function applyNoteAutocompleteSelection(
   const terminator = context.kind === "person" ? "\t" : " ";
   const replacement = marker + item.name + terminator;
 
-  replaceNoteEditorRange(editor, context.start, context.end, replacement);
+  const newCaret = replaceNoteEditorRange(editor, context.start, context.end, replacement);
+  if (context.kind === "person") {
+    renderNotePersonHighlights(editor, newCaret);
+  }
 
   closeNoteAutocomplete();
   scheduleAutosave();
+  if (context.kind === "person") {
+    void refreshCurrentNotePersons();
+  }
 }
 
 function insertPersonTerminator(editor: HTMLElement): boolean {
@@ -1389,9 +1691,11 @@ function insertPersonTerminator(editor: HTMLElement): boolean {
     return false;
   }
 
-  replaceNoteEditorRange(editor, context.end, context.end, "\t");
+  const newCaret = replaceNoteEditorRange(editor, context.end, context.end, "\t");
+  renderNotePersonHighlights(editor, newCaret);
   closeNoteAutocomplete();
   scheduleAutosave();
+  void refreshCurrentNotePersons();
   return true;
 }
 
@@ -1411,10 +1715,42 @@ function handleNoteAutocompleteKeyDown(
   editor: HTMLElement,
   event: KeyboardEvent
 ): boolean {
-  const panel = document.getElementById("note-autocomplete");
-  const autocompleteVisible = Boolean(panel && !panel.hidden && noteAutocompleteItems.length > 0);
+  // Fuer normale Editor-Navigation keinerlei DOM-/Range-Arbeit ausfuehren.
+  // getNoteAutocompleteContext() ist bei contenteditable vergleichsweise teuer
+  // und wurde bisher auch fuer Tasten aufgerufen, die uns gar nicht betreffen.
+  const isAutocompleteNavigationKey =
+    event.key === "ArrowDown" || event.key === "ArrowUp" ||
+    event.key === "Enter" || event.key === "Escape";
+  const isTokenTerminatorKey = event.key === "Tab";
 
-  if (autocompleteVisible) {
+  if (!isAutocompleteNavigationKey && !isTokenTerminatorKey) {
+    return false;
+  }
+
+  const panel = document.getElementById("note-autocomplete");
+  const panelVisible = Boolean(
+    panel && !panel.hidden && noteAutocompleteItems.length > 0 && noteAutocompleteKind
+  );
+
+  // Pfeiltasten/Enter/Escape interessieren nur bei sichtbarer Vorschlagsliste.
+  // Insbesondere ArrowUp/ArrowDown im normalen Editor bleiben dadurch komplett
+  // auf dem nativen WebKit-Pfad. TAB muss dagegen auch ohne Liste ein Token
+  // abschliessen koennen und benoetigt deshalb weiterhin den Caret-Kontext.
+  if (!panelVisible && !isTokenTerminatorKey) {
+    return false;
+  }
+
+  const currentContext = getNoteAutocompleteContext(editor);
+  const autocompleteActive = Boolean(
+    panelVisible &&
+    currentContext &&
+    currentContext.kind === noteAutocompleteKind
+  );
+
+  // Eine noch kurz sichtbare (debouncte) Liste darf normale Editor-Tasten
+  // nicht schlucken, wenn der Caret inzwischen ausserhalb eines aktiven
+  // #/@-Tokens steht.
+  if (autocompleteActive) {
     if (event.key === "ArrowDown") {
       event.preventDefault();
       noteAutocompleteSelectedIndex =
@@ -1888,70 +2224,72 @@ function renderPersonPanel(persons: PersonInfo[]): void {
   }
 }
 
-async function refreshCurrentNotePersons(): Promise<void> {
+function getCurrentNotePersonsFromEditor(): PersonInfo[] {
+  const text = getEditorText("note-content");
+  const persons: PersonInfo[] = [];
+  const seen = new Set<string>();
+
+  for (const match of findNotePersons(text)) {
+    const name = match.name;
+    const normalizedName = normalizePersonName(name);
+    if (!name || !normalizedName || seen.has(normalizedName)) continue;
+
+    seen.add(normalizedName);
+    persons.push({ name, normalizedName });
+  }
+
+  return persons;
+}
+
+function renderCurrentNotePersons(persons: PersonInfo[]): void {
   const container = document.getElementById("note-persons");
   if (!container) return;
 
-  if (!currentNoteExists || !currentMailNotesId) {
-    if (container.childElementCount > 0 || !container.hidden) {
-      container.innerHTML = "";
-      container.hidden = true;
-    }
+  const newSignature = persons.map((person) => person.normalizedName || person.name).join("\u0001");
+  const currentSignature = Array.from(
+    container.querySelectorAll<HTMLButtonElement>(".note-person")
+  )
+    .map((button) => (button.dataset.normalizedName || button.textContent || "").replace(/^@/, ""))
+    .join("\u0001");
+
+  if (newSignature === currentSignature) return;
+
+  if (persons.length === 0) {
+    container.innerHTML = "";
+    container.hidden = true;
     return;
   }
 
-  try {
-    const response = await fetch(
-      AgentUrl + "/note/persons?mailNotesId=" + encodeURIComponent(currentMailNotesId)
-    );
-    if (!response.ok) return;
-
-    const result = await response.json();
-    const persons: PersonInfo[] = Array.isArray(result.items) ? result.items : [];
-
-    const newSignature = persons.map((person) => person.normalizedName || person.name).join("\u0001");
-    const currentSignature = Array.from(
-      container.querySelectorAll<HTMLButtonElement>(".note-person")
-    )
-      .map((button) => (button.dataset.normalizedName || button.textContent || "").replace(/^@/, ""))
-      .join("\u0001");
-
-    if (newSignature === currentSignature) {
-      return;
-    }
-
-    if (persons.length === 0) {
-      container.innerHTML = "";
-      container.hidden = true;
-      return;
-    }
-
-    const fragment = document.createDocumentFragment();
-    for (const person of persons) {
-      const button = document.createElement("button");
-      button.type = "button";
-      button.className = "note-person";
-      button.dataset.normalizedName = person.normalizedName || person.name;
-      button.textContent = "@" + person.name;
-      button.title = "E-Mail an " + person.name + " schreiben";
-      button.onclick = (event) => {
-        event.stopPropagation();
-        closePersonContextMenu();
-        composeMailToPerson(person);
-      };
-      button.oncontextmenu = (event) => {
-        event.preventDefault();
-        event.stopPropagation();
-        showPersonContextMenu(person, event.clientX, event.clientY);
-      };
-      fragment.appendChild(button);
-    }
-
-    container.replaceChildren(fragment);
-    container.hidden = false;
-  } catch {
-    // Personen-Anzeige ist Komfortfunktion.
+  const fragment = document.createDocumentFragment();
+  for (const person of persons) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "note-person";
+    button.dataset.normalizedName = person.normalizedName || person.name;
+    button.textContent = "@" + person.name;
+    button.title = "E-Mail an " + person.name + " schreiben";
+    button.onclick = (event) => {
+      event.stopPropagation();
+      closePersonContextMenu();
+      composeMailToPerson(person);
+    };
+    button.oncontextmenu = (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      showPersonContextMenu(person, event.clientX, event.clientY);
+    };
+    fragment.appendChild(button);
   }
+
+  container.replaceChildren(fragment);
+  container.hidden = false;
+}
+
+async function refreshCurrentNotePersons(): Promise<void> {
+  // Die Chips unter dem Editor spiegeln bewusst den aktuellen Editorinhalt
+  // wider, nicht den zuletzt vom Agent gespeicherten Stand. Dadurch erscheint
+  // auch eine manuelle Aenderung innerhalb eines @Person-Tokens sofort.
+  renderCurrentNotePersons(getCurrentNotePersonsFromEditor());
 }
 
 async function toggleFavoritesFilter(): Promise<void> {
@@ -3636,18 +3974,23 @@ async function openMailNotesLink(
         ? resolved.itemId.toString()
         : "";
 
-    console.info(
-      "[MailNotes][Resolve]",
-      {
-        url,
-        found: resolved.found,
-        type: resolved.type,
-        mailNotesId: (resolved as any).mailNotesId || "",
-        mailboxAddress: (resolved as any).mailboxAddress || "",
-        itemId: storedItemId,
-        itemIdLength: storedItemId.length
-      }
-    );
+    const sourceMailboxAddress =
+      (Office.context.mailbox.userProfile?.emailAddress || "")
+        .toString()
+        .trim();
+    const targetMailboxAddress =
+      ((resolved as any).mailboxAddress || "")
+        .toString()
+        .trim();
+    const sameMailbox =
+      sourceMailboxAddress !== "" &&
+      targetMailboxAddress !== ""
+        ? sourceMailboxAddress.localeCompare(
+            targetMailboxAddress,
+            undefined,
+            { sensitivity: "accent" }
+          ) === 0
+        : null;
 
     if (!storedItemId) {
       await copyMessageIdFallback(
@@ -3655,6 +3998,56 @@ async function openMailNotesLink(
         "Keine Item-ID vorhanden."
       );
 
+      return;
+    }
+
+    // Outlooks displayMessageFormAsync öffnet eine EWS-ID immer im
+    // Kontext der aktuell aktiven Mailbox. Eine gültige SRL-ID aus einer
+    // anderen Mailbox würde deshalb mit ItemNotFound (9049) scheitern.
+    // Das ist kein defekter SRL und darf insbesondere nicht in die
+    // RepairQueue gelangen.
+    if (sameMailbox === false) {
+      const graphWebLink =
+        ((resolved as any).graphWebLink || "")
+          .toString()
+          .trim();
+
+      if (graphWebLink) {
+        const accountAwareGraphWebLink =
+          addOutlookAccountHint(
+            graphWebLink,
+            targetMailboxAddress
+          );
+
+        const crossMailboxAction = await confirmCrossMailboxWebOpen(
+          targetMailboxAddress
+        );
+        if (crossMailboxAction === "browser") {
+          window.open(
+            accountAwareGraphWebLink,
+            "_blank"
+          );
+        } else if (crossMailboxAction === "switch") {
+          await setPendingOpen(
+            (resolved as any).mailNotesId || "",
+            targetMailboxAddress,
+            (resolved as any).title || ""
+          );
+        }
+        return;
+      }
+
+      const crossMailboxAction = await confirmCrossMailboxWebOpen(
+        targetMailboxAddress,
+        false
+      );
+      if (crossMailboxAction === "switch") {
+        await setPendingOpen(
+          (resolved as any).mailNotesId || "",
+          targetMailboxAddress,
+          (resolved as any).title || ""
+        );
+      }
       return;
     }
 
@@ -3693,16 +4086,6 @@ async function openMailNotesLink(
     log(
       "Öffne Mail mit Item-ID-Kandidaten:",
       candidates
-    );
-
-    console.info(
-      "[MailNotes][Open] Item-ID-Kandidaten",
-      candidates.map((candidate, index) => ({
-        index,
-        itemId: candidate,
-        length: candidate.length,
-        isResolvedItemId: candidate === storedItemId
-      }))
     );
 
     if (
@@ -3752,15 +4135,6 @@ async function openMailNotesLink(
                 return;
               }
 
-              console.info(
-                "[MailNotes][Open] displayMessageFormAsync erfolgreich",
-                {
-                  candidateIndex: index,
-                  candidate,
-                  candidateLength: candidate.length
-                }
-              );
-
               setText(
                 "mail-link-status",
                 ""
@@ -3800,6 +4174,220 @@ async function openMailNotesLink(
     await copyMessageIdFallback(
       url,
       "Öffnen fehlgeschlagen."
+    );
+  }
+}
+
+type CrossMailboxAction = "cancel" | "switch" | "browser";
+
+function confirmCrossMailboxWebOpen(
+  targetMailboxAddress: string,
+  allowWebBrowser: boolean = true
+): Promise<CrossMailboxAction> {
+  const overlay = document.getElementById("cross-mailbox-open-confirm");
+  const cancelButton = document.getElementById("btn-cross-mailbox-cancel") as HTMLButtonElement | null;
+  const switchButton = document.getElementById("btn-cross-mailbox-switch") as HTMLButtonElement | null;
+  const browserButton = document.getElementById("btn-cross-mailbox-browser") as HTMLButtonElement | null;
+  const mailbox = document.getElementById("cross-mailbox-target");
+  const suffix = document.getElementById("cross-mailbox-open-suffix");
+
+  if (!overlay || !cancelButton || !switchButton || !browserButton || !mailbox || !suffix) {
+    console.error("Cross-Mailbox-Dialog ist im Taskpane nicht vorhanden.");
+    return Promise.resolve("cancel");
+  }
+
+  mailbox.textContent = targetMailboxAddress || "das Zielpostfach";
+  suffix.textContent = allowWebBrowser
+    ? " und öffnen Sie den Link erneut – oder öffnen Sie die Mail im Webbrowser."
+    : " und öffnen Sie den Link erneut.";
+  browserButton.hidden = !allowWebBrowser;
+
+  return new Promise<CrossMailboxAction>((resolve) => {
+    let finished = false;
+
+    const finish = (result: CrossMailboxAction) => {
+      if (finished) return;
+      finished = true;
+      overlay.hidden = true;
+      cancelButton.onclick = null;
+      switchButton.onclick = null;
+      browserButton.onclick = null;
+      overlay.onclick = null;
+      document.removeEventListener("keydown", onKeyDown, true);
+      resolve(result);
+    };
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        event.stopPropagation();
+        finish("cancel");
+      }
+    };
+
+    cancelButton.onclick = () => finish("cancel");
+    switchButton.onclick = () => finish("switch");
+    browserButton.onclick = allowWebBrowser
+      ? () => finish("browser")
+      : null;
+    overlay.onclick = (event) => {
+      if (event.target === overlay) finish("cancel");
+    };
+    document.addEventListener("keydown", onKeyDown, true);
+
+    overlay.hidden = false;
+    window.setTimeout(
+      () => switchButton.focus(),
+      0
+    );
+  });
+}
+
+async function setPendingOpen(
+  mailNotesId: string,
+  mailboxAddress: string,
+  subject: string
+): Promise<void> {
+  if (!mailNotesId || !mailboxAddress) return;
+
+  const body = new URLSearchParams();
+  body.append("mailNotesId", mailNotesId);
+  body.append("mailboxAddress", mailboxAddress);
+  if (subject) body.append("subject", subject);
+
+  try {
+    const response = await fetch(AgentUrl + "/pendingopen", {
+      method: "POST",
+      body
+    });
+    if (!response.ok) {
+      throw new Error("Agent returned HTTP " + response.status);
+    }
+  } catch (error) {
+    console.warn("Pending-Open konnte nicht gespeichert werden:", error);
+  }
+}
+
+async function clearPendingOpen(): Promise<void> {
+  try {
+    await fetch(AgentUrl + "/pendingopen", { method: "DELETE" });
+  } catch (error) {
+    console.warn("Pending-Open konnte nicht verworfen werden:", error);
+  }
+}
+
+async function refreshPendingOpenNotice(): Promise<void> {
+  const notice = document.getElementById("pending-open-notice");
+  const text = document.getElementById("pending-open-notice-text");
+  const openButton = document.getElementById("btn-pending-open");
+  const discardButton = document.getElementById("btn-discard-pending-open");
+  if (!notice || !text || !openButton || !discardButton) return;
+
+  notice.hidden = true;
+
+  const mailboxAddress =
+    (Office.context.mailbox.userProfile?.emailAddress || "").toString().trim();
+  if (!mailboxAddress) return;
+
+  try {
+    const params = new URLSearchParams();
+    params.append("mailboxAddress", mailboxAddress);
+    const response = await fetch(AgentUrl + "/pendingopen?" + params.toString());
+    if (!response.ok) return;
+
+    const pending = await response.json();
+    if (!pending?.found || !pending.mailNotesId) return;
+
+    const subject = (pending.subject || "").toString().trim();
+    text.textContent = subject
+      ? "„" + subject + "“"
+      : "Die zuvor ausgewählte Mail kann jetzt geöffnet werden.";
+
+    openButton.onclick = async () => {
+      const mailNotesId = pending.mailNotesId.toString();
+      notice.hidden = true;
+      await clearPendingOpen();
+      await openMailNotesLink("mailnotes:" + mailNotesId);
+    };
+
+    discardButton.onclick = async () => {
+      notice.hidden = true;
+      await clearPendingOpen();
+    };
+
+    notice.hidden = false;
+  } catch (error) {
+    console.warn("Pending-Open konnte nicht geprüft werden:", error);
+  }
+}
+
+function addOutlookAccountHint(
+  graphWebLink: string,
+  targetMailboxAddress: string
+): string {
+  if (!targetMailboxAddress) {
+    return graphWebLink;
+  }
+
+  try {
+    const url = new URL(graphWebLink);
+    url.searchParams.set(
+      "login_hint",
+      targetMailboxAddress
+    );
+    return url.toString();
+  } catch (error) {
+    console.warn(
+      "[MailNotes][Open] login_hint konnte nicht ergänzt werden",
+      error
+    );
+    return graphWebLink;
+  }
+}
+
+async function copyCrossMailboxSearchFallback(
+  resolved: any,
+  targetMailboxAddress: string
+): Promise<void> {
+  const queueMeta = parseResolvedRepairMetadata(resolved.subtitle);
+  const searchText = buildOutlookSearchText({
+    subject: (resolved.title || "").toString(),
+    senderName: queueMeta.senderName,
+    senderAddress: "",
+    mailDate: queueMeta.mailDate
+  } as RepairQueueItem);
+  const targetLabel = targetMailboxAddress || "dem Zielkonto";
+
+  if (!searchText) {
+    setText(
+      "mail-link-status",
+      "Mail liegt in " + targetLabel +
+      " – bitte dort in Outlook suchen."
+    );
+    return;
+  }
+
+  try {
+    if (!navigator.clipboard) {
+      throw new Error("Clipboard API nicht verfügbar");
+    }
+
+    await navigator.clipboard.writeText(searchText);
+    setText(
+      "mail-link-status",
+      "Mail liegt in " + targetLabel +
+      " – Outlook-Suchbegriff wurde kopiert."
+    );
+
+  } catch (error) {
+    console.warn(
+      "[MailNotes][Open] Cross-Mailbox-Suchbegriff konnte nicht kopiert werden",
+      error
+    );
+    setText(
+      "mail-link-status",
+      "Mail liegt in " + targetLabel +
+      " – bitte dort nach „" + searchText + "“ suchen."
     );
   }
 }
@@ -4172,6 +4760,9 @@ function setEditorText(
     element.value = text;
   } else {
     element.textContent = text;
+    if (id === "note-content") {
+      renderNotePersonHighlights(element);
+    }
   }
 }
 

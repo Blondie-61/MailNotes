@@ -116,6 +116,15 @@
             <div id="search-results" class="search-results" hidden></div>
         </section>
 
+        <section id="pending-open-notice" class="pending-open-notice" hidden>
+            <div>
+                <strong>Verknüpfte Mail öffnen?</strong>
+                <div id="pending-open-notice-text"></div>
+            </div>
+            <button id="btn-pending-open" type="button">Öffnen</button>
+            <button id="btn-discard-pending-open" type="button">Verwerfen</button>
+        </section>
+
         <section id="repair-queue-notice" class="repair-queue-notice" hidden>
             <div>
                 <strong>Diese Mail muss neu zugeordnet werden.</strong>
@@ -318,6 +327,21 @@
             <div class="confirm-actions">
                 <button id="btn-note-delete-cancel" class="confirm-button" type="button">Abbrechen</button>
                 <button id="btn-note-delete-confirm" class="confirm-button confirm-button-primary" type="button">Löschen</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="cross-mailbox-open-confirm" class="confirm-overlay" hidden role="presentation">
+        <div class="confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="cross-mailbox-open-title" aria-describedby="cross-mailbox-open-text">
+            <div id="cross-mailbox-open-title" class="confirm-title">Mail liegt in einem anderen Postfach</div>
+            <div id="cross-mailbox-open-text" class="confirm-text">
+                Diese Mail kann aus dem aktuellen Postfach nicht direkt geöffnet werden.
+                Wechseln Sie zu <strong id="cross-mailbox-target"></strong><span id="cross-mailbox-open-suffix"> und öffnen Sie den Link erneut – oder öffnen Sie die Mail im Webbrowser.</span>
+            </div>
+            <div class="confirm-actions">
+                <button id="btn-cross-mailbox-cancel" class="confirm-button" type="button">Abbrechen</button>
+                <button id="btn-cross-mailbox-switch" class="confirm-button confirm-button-primary" type="button">Postfach wechseln</button>
+                <button id="btn-cross-mailbox-browser" class="confirm-button" type="button">Im Webbrowser öffnen</button>
             </div>
         </div>
     </div>
