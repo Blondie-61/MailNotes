@@ -1,4 +1,4 @@
-/* global Office, document, window, navigator */
+﻿/* global Office, document, window, navigator */
 
 declare const __MAILNOTES_BUILD_TIME__: string;
 declare const __MAILNOTES_BUILD_COMMIT__: string;
@@ -983,23 +983,47 @@ function setupButtons() {
       );
     };
 
-    // Der Browser markiert bei Doppelklick normalerweise nur ein einzelnes
-    // Wort. Innerhalb von @Person markieren wir stattdessen den kompletten
-    // Person-Token inklusive @; ausserhalb bleibt das Standardverhalten.
-    noteContent.ondblclick = (event) => {
-      const target = event.target instanceof Element
-        ? event.target.closest(".note-person-token") as HTMLElement | null
-        : null;
-      if (!target || !noteContent.contains(target)) return;
+    // Outlook/Edge unter Windows setzt seine Wortselektion teilweise erst nach
+    // dem dblclick-Handler. Deshalb fangen wir bereits den zweiten mousedown in
+    // der Capture-Phase ab und markieren @Person selbst.
+    const selectPersonToken = (event: MouseEvent): boolean => {
+      const path = typeof event.composedPath === "function" ? event.composedPath() : [];
+      const pathToken = path.find(
+        (entry) => entry instanceof Element && entry.classList.contains("note-person-token")
+      ) as HTMLElement | undefined;
+      const target = pathToken || (
+        event.target instanceof Element
+          ? event.target.closest(".note-person-token") as HTMLElement | null
+          : null
+      );
+      if (!target || !noteContent.contains(target)) return false;
 
       const selection = window.getSelection();
-      if (!selection) return;
+      if (!selection) return false;
 
       const range = document.createRange();
       range.selectNodeContents(target);
       selection.removeAllRanges();
       selection.addRange(range);
-      event.preventDefault();
+      return true;
+    };
+
+    noteContent.addEventListener(
+      "mousedown",
+      (event) => {
+        if (event.button === 0 && event.detail === 2 && selectPersonToken(event)) {
+          event.preventDefault();
+          event.stopPropagation();
+        }
+      },
+      true
+    );
+
+    noteContent.ondblclick = (event) => {
+      if (selectPersonToken(event)) {
+        event.preventDefault();
+        event.stopPropagation();
+      }
     };
 
     noteContent.onkeyup = (event) => {
@@ -2513,6 +2537,8 @@ type SearchResultItem = {
   mailDate: string;
   modifiedAt: string;
   snippet: string;
+  tags: string[];
+  persons: string[];
 };
 
 function scheduleSearch(searchText: string): void {
@@ -2530,7 +2556,11 @@ function scheduleSearch(searchText: string): void {
     "search-status",
     favoritesFilterActive || activeTags.length > 0 || activePersons.length > 0 ? "Gefilterte Suche …" : "Suche …"
   );
+  // Bereits beim Planen wird eine laufende aeltere Suche ungueltig. So kann
+  // deren Antwort nicht waehrend der Debounce-Zeit wieder alte Treffer malen.
+  searchSequence++;
   searchTimer = window.setTimeout(() => {
+    searchTimer = undefined;
     void searchNotes(trimmed, favoritesFilterActive, activeTags.map((tag) => tag.normalizedName), activePersons.map((person) => person.normalizedName));
   }, 250);
 }
@@ -2647,10 +2677,43 @@ function renderSearchResults(items: SearchResultItem[], singularLabel: string = 
     button.appendChild(meta);
 
     if (item.snippet) {
+      const noteRow = document.createElement("span");
+      noteRow.className = "search-result-note";
+
+      const noteIcon = document.createElement("span");
+      noteIcon.className = "search-result-note-icon";
+      noteIcon.setAttribute("aria-label", "Notiz");
+      noteIcon.setAttribute("title", "Notiz");
+      noteRow.appendChild(noteIcon);
+
       const snippet = document.createElement("span");
       snippet.className = "search-result-snippet";
-      snippet.textContent = item.snippet;
-      button.appendChild(snippet);
+      snippet.textContent = item.snippet.replace(/[\[\]]/g, "");
+      noteRow.appendChild(snippet);
+      button.appendChild(noteRow);
+    }
+
+    const tags = Array.isArray(item.tags) ? item.tags.filter(Boolean) : [];
+    const persons = Array.isArray(item.persons) ? item.persons.filter(Boolean) : [];
+    if (tags.length > 0 || persons.length > 0) {
+      const metadata = document.createElement("span");
+      metadata.className = "search-result-metadata";
+
+      for (const tag of tags) {
+        const chip = document.createElement("span");
+        chip.className = "search-result-tag";
+        chip.textContent = "#" + tag;
+        metadata.appendChild(chip);
+      }
+
+      for (const person of persons) {
+        const chip = document.createElement("span");
+        chip.className = "search-result-person";
+        chip.textContent = "@" + person;
+        metadata.appendChild(chip);
+      }
+
+      button.appendChild(metadata);
     }
 
     button.onclick = () => {
@@ -3094,7 +3157,7 @@ async function saveNoteSnapshot(snapshot: NoteSaveSnapshot): Promise<any> {
   body.append("content", snapshot.content);
   body.append("links", snapshot.links);
 
-  log("POST body:", body.toString());
+  // Keine Notizinhalte oder Mail-IDs in die Entwicklerkonsole schreiben.
 
   const response = await fetch(AgentUrl + "/note", {
     method: "POST",
@@ -3104,7 +3167,6 @@ async function saveNoteSnapshot(snapshot: NoteSaveSnapshot): Promise<any> {
   const responseText = await response.text();
 
   log("SAVE status:", response.status);
-  log("SAVE response:", responseText);
 
   if (!response.ok) {
     throw new Error("Agent returned HTTP " + response.status);
@@ -3120,11 +3182,6 @@ async function getNote(
     AgentUrl +
     "/note?messageId=" +
     encodeURIComponent(messageId);
-
-  log(
-    "GET note URL:",
-    url
-  );
 
   let response: Response;
 
@@ -3149,11 +3206,6 @@ async function getNote(
   log(
     "GET status:",
     response.status
-  );
-
-  log(
-    "GET response:",
-    responseText
   );
 
   if (!response.ok) {
@@ -3813,6 +3865,11 @@ async function renderBacklinks(
               expectedSequence === itemChangeSequence &&
               getCurrentMailIdentity() === mailIdentity
             ) {
+              fileLog('OPEN_SUCCESS', {
+                mailNotesId: (resolved as any).mailNotesId || '',
+                resolvePath: (resolved as any).resolvePath || 'unknown',
+                candidateIndex: index
+              });
               setText(
                 "mail-link-status",
                 ""
@@ -3969,6 +4026,12 @@ async function openMailNotesLink(
       return;
     }
 
+    fileLog('OPEN_RESOLVED', {
+      mailNotesId: (resolved as any).mailNotesId || '',
+      resolvePath: (resolved as any).resolvePath || 'unknown',
+      hasGraphWebLink: Boolean((resolved as any).graphWebLink)
+    });
+
     const storedItemId =
       resolved.itemId
         ? resolved.itemId.toString()
@@ -4099,6 +4162,10 @@ async function openMailNotesLink(
               "mail-link-status",
               "Öffnen fehlgeschlagen – Link wurde zur Reparatur vorgemerkt."
             );
+            fileLog('OPEN_FALLBACK', {
+              mailNotesId: (resolved as any).mailNotesId || '',
+              candidatesTried: candidates.length
+            });
             void addRepairQueueItem(resolved, storedItemId);
             return;
           }
@@ -4131,6 +4198,11 @@ async function openMailNotesLink(
                   }
                 );
 
+                fileLog('OPEN_CANDIDATE_FAIL', {
+                  mailNotesId: (resolved as any).mailNotesId || '',
+                  candidateIndex: index,
+                  errorCode: result.error?.code
+                });
                 tryCandidate(index + 1);
                 return;
               }
@@ -4858,7 +4930,57 @@ async function addRepairQueueItem(resolved: any, oldItemId: string): Promise<voi
     throw new Error("Repair queue returned HTTP " + response.status);
   }
   repairHintDismissed = false;
+  // Erst beim defekten Link besteht echter Bedarf an Graph.
+  // Die SRL-Reparatur bleibt auch bei Ablehnung unverändert nutzbar.
+  void offerGraphForBrokenLink((resolved.mailboxAddress || "").toString());
   await refreshRepairQueueNotice(true);
+}
+
+async function offerGraphForBrokenLink(targetMailbox: string): Promise<void> {
+  const mailbox = (targetMailbox || getCurrentMailSnapshot()?.mailboxAddress || "").trim();
+  if (!mailbox) return;
+  try {
+    const statusResponse = await fetch(
+      AgentUrl + "/graph/offer?mailboxAddress=" + encodeURIComponent(mailbox)
+    );
+    if (!statusResponse.ok) return;
+    const status = await statusResponse.json();
+    if (status.state !== "unknown") return;
+
+    const accepted = window.confirm(
+      "Die Mail-Verknüpfung konnte nicht geöffnet werden.\n\n" +
+      "Microsoft Graph kann helfen, verschobene Mails wiederzufinden.\n" +
+      "Graph für " + mailbox + " einmalig einrichten?\n\n" +
+      "OK = Einrichten · Abbrechen = Nicht jetzt (dauerhaft)"
+    );
+    const body = new URLSearchParams();
+    body.append("mailboxAddress", mailbox);
+    body.append("decision", accepted ? "accept" : "decline");
+    const response = await fetch(AgentUrl + "/graph/decision", {
+      method: "POST", body
+    });
+    if (!response.ok) return;
+    const result = await response.json();
+    if (accepted && result.signInStarted) {
+      // Der Agent meldet sich unabhängig vom HTTP-Worker an.
+      // SRL-Reparatur bleibt sichtbar; nach erfolgreicher Anmeldung
+      // wird die Reparaturwarteschlange erneut geladen.
+      for (let attempt = 0; attempt < 60; attempt++) {
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+        const poll = await fetch(
+          AgentUrl + "/graph/offer?mailboxAddress=" + encodeURIComponent(mailbox)
+        );
+        if (!poll.ok) break;
+        const updated = await poll.json();
+        if (updated.state === "available") {
+          await refreshRepairQueueNotice(false);
+          break;
+        }
+      }
+    }
+  } catch (error) {
+    console.warn("Graph-Einrichtungsangebot fehlgeschlagen; SRL bleibt aktiv:", error);
+  }
 }
 
 function getRepairQueueUrl(path: "" | "/count"): string {
@@ -4882,9 +5004,9 @@ async function refreshRepairQueueNotice(forceShow = false): Promise<number> {
     const count = Number(result.count || 0);
     repairQueueCount = count;
 
-    if (typeof result.gmlActive === "boolean") {
-      currentGmlActive = result.gmlActive;
-    }
+    // /repairqueue/count meldet die Graph-Verfuegbarkeit des Postfachs,
+    // nicht die GML-Identitaet der aktuell angezeigten Mail.
+    // currentGmlActive wird ausschliesslich durch /note und /save gesetzt.
     const notice = document.getElementById("repair-queue-notice");
 
     if (count === 0) {
