@@ -2522,9 +2522,9 @@ function setInfoText(id: string, value: unknown): void {
     return;
   }
 
-  element.textContent = value === null || value === undefined || value === ""
-    ? "–"
-    : String(value);
+  element.textContent = (id === "info-status" && (value === null || value === undefined || value === ""))
+    ? ""
+    : (value === null || value === undefined || value === "" ? "–" : String(value));
 }
 
 type SearchResultItem = {

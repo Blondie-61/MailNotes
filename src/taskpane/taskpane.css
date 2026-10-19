@@ -172,6 +172,13 @@ h1 {
     display: none;
 }
 
+.info-credit {
+    margin-top: 9px;
+    color: #86868b;
+    font-size: 11px;
+    line-height: 1.4;
+}
+
 /* Mailinformationen */
 
 .field {
